@@ -129,43 +129,114 @@ typedef struct {
     EFI_GOP_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
-// ================= シリアル =================
-static inline void outb(UINT16 port, UINT8 val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-static inline UINT8 inb(UINT16 port) {
-    UINT8 v;
-    __asm__ volatile ("inb %1, %0" : "=a"(v) : "Nd"(port));
-    return v;
-}
-void init_serial() {
-    outb(0x3f8+1,0);
-    outb(0x3f8+3,0x80);
-    outb(0x3f8+0,3);
-    outb(0x3f8+1,0);
-    outb(0x3f8+3,3);
-    outb(0x3f8+2,0xC7);
-}
-void serial_puts(const char *s) {
-    while(*s){
-        while(!(inb(0x3f8+5)&0x20));
-        outb(0x3f8,*s++);
+// ================= PMM =================
+typedef struct {
+    UINT32 Type;
+    UINT32 Pad;
+    UINT64 PhysicalStart;
+    UINT64 VirtualStart;
+    UINT64 NumberOfPages;
+    UINT64 Attribute;
+} EFI_MEMORY_DESCRIPTOR;
+
+typedef struct {
+    UINT64 base;
+    UINT64 size;
+} MemoryRegion;
+
+#define MAX_REGIONS 128
+MemoryRegion regions[MAX_REGIONS];
+UINT32 region_count = 0;
+
+void init_pmm(void *map, UINT64 map_size, UINT64 desc_size) {
+    UINT8 *ptr = (UINT8*)map;
+
+    for (UINT64 i = 0; i < map_size; i += desc_size) {
+        EFI_MEMORY_DESCRIPTOR *desc =
+            (EFI_MEMORY_DESCRIPTOR*)(ptr + i);
+
+        if (desc->Type == 7 && region_count < MAX_REGIONS) {
+            regions[region_count].base = desc->PhysicalStart;
+            regions[region_count].size = desc->NumberOfPages * 4096;
+            region_count++;
+        }
     }
+}
+
+// ================= kmalloc =================
+UINT64 heap_current;
+UINT64 heap_end;
+
+void init_heap() {
+    if (region_count == 0) return;
+
+    heap_current = regions[0].base;
+    heap_end     = regions[0].base + regions[0].size;
+}
+
+void* kmalloc(UINT64 size) {
+    size = (size + 7) & ~7;
+
+    if (heap_current + size > heap_end) return 0;
+
+    void* ptr = (void*)heap_current;
+    heap_current += size;
+    return ptr;
+}
+
+// ================= IDT（安全版） =================
+struct IDTEntry {
+    UINT16 offset_low;
+    UINT16 selector;
+    UINT8  ist;
+    UINT8  type_attr;
+    UINT16 offset_mid;
+    UINT32 offset_high;
+    UINT32 zero;
+} __attribute__((packed));
+
+struct IDTR {
+    UINT16 limit;
+    UINT64 base;
+} __attribute__((packed));
+
+struct IDTEntry idt[256];
+
+// ダミーハンドラ（何もしない）
+void dummy_isr() {
+    __asm__ volatile ("iretq");
+}
+
+void set_idt_entry(int vec, void* handler) {
+    UINT64 addr = (UINT64)handler;
+
+    idt[vec].offset_low  = addr & 0xFFFF;
+    idt[vec].selector    = 0x08;
+    idt[vec].ist         = 0;
+    idt[vec].type_attr   = 0x8E;
+    idt[vec].offset_mid  = (addr >> 16) & 0xFFFF;
+    idt[vec].offset_high = (addr >> 32);
+    idt[vec].zero        = 0;
+}
+
+void load_idt() {
+    struct IDTR idtr;
+    idtr.limit = sizeof(idt) - 1;
+    idtr.base  = (UINT64)&idt;
+
+    __asm__ volatile ("lidt %0" : : "m"(idtr));
 }
 
 // ================= メイン =================
 EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
 
-    init_serial();
-    serial_puts("\r\n=== Saikyokn OS v3.1: Stable Kernel Entry ===\r\n");
-
     EFI_BOOT_SERVICES *BS = SystemTable->BootServices;
 
+    // GOP
     EFI_GUID gop_guid =
         {0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
 
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
-
     BS->LocateProtocol(&gop_guid, 0, (void**)&gop);
 
     UINT32 *vram = (UINT32*)gop->Mode->FrameBufferBase;
@@ -173,41 +244,48 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     UINT32 vr = gop->Mode->Info->VerticalResolution;
     UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
 
-    // ================= メモリマップ =================
+    // メモリマップ
     UINT64 map_size = 0, map_key, desc_size;
     UINT32 desc_ver;
     void *map_buf = 0;
 
     BS->GetMemoryMap(&map_size, 0, &map_key, &desc_size, &desc_ver);
     map_size += 1024;
-
     BS->AllocatePool(EfiLoaderData, map_size, &map_buf);
 
-    // ================= ExitBootServices =================
-    EFI_STATUS status;
-
+    // ExitBootServices
     while (1) {
-        status = BS->GetMemoryMap(&map_size, map_buf, &map_key, &desc_size, &desc_ver);
-        if (status != EFI_SUCCESS) break;
+        if (BS->GetMemoryMap(&map_size, map_buf, &map_key, &desc_size, &desc_ver) != EFI_SUCCESS)
+            break;
 
-        status = BS->ExitBootServices(ImageHandle, map_key);
-        if (status == EFI_SUCCESS) break;
+        if (BS->ExitBootServices(ImageHandle, map_key) == EFI_SUCCESS)
+            break;
     }
 
-    // ================= 完全独立後 =================
+    // PMM + heap
+    init_pmm(map_buf, map_size, desc_size);
+    init_heap();
 
-    // 👉 青固定（PixelFormat無視して確実に青にする）
-    UINT32 blue = 0x0000FF;
+    // kmallocテスト（安全）
+    void *p = kmalloc(64);
 
+    // IDT（全部ダミー）
+    for (int i = 0; i < 256; i++) {
+        set_idt_entry(i, dummy_isr);
+    }
+
+    load_idt();
+    __asm__("sti");
+
+    // 画面描画
     for (UINT32 y = 0; y < vr; y++) {
         for (UINT32 x = 0; x < hr; x++) {
-            vram[y * stride + x] = blue;
+            vram[y * stride + x] = 0x00202020;
         }
     }
 
-    draw_string(vram, stride, 100, 100, 0xFFFFFF, "SAIKYOKN OS v3.1");
-    draw_string(vram, stride, 100, 120, 0x00FF00, "KERNEL: ACTIVE");
-    draw_string(vram, stride, 100, 140, 0xFFFF00, "STATUS: INDEPENDENT");
+    draw_string(vram, stride, 100, 100, 0xFFFFFF, "STABLE CORE OK");
+    draw_string(vram, stride, 100, 120, 0x00FF00, "PMM / KMALLOC / IDT READY");
 
     while (1) {
         __asm__("hlt");
