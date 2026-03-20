@@ -1,80 +1,217 @@
 #include "font.h"
 
-typedef unsigned long long EFI_STATUS;
-typedef void* EFI_HANDLE;
+// ================= 基本型 =================
+typedef unsigned long long UINT64;
+typedef unsigned int       UINT32;
+typedef unsigned short     UINT16;
+typedef unsigned char      UINT8;
+typedef UINT64             EFI_STATUS;
+typedef void*              EFI_HANDLE;
+
 #define EFIAPI __attribute__((ms_abi))
 #define EFI_SUCCESS 0
+#define EfiLoaderData 4
 
-typedef struct { unsigned int Data1; unsigned short Data2; unsigned short Data3; unsigned char Data4[8]; } EFI_GUID;
-
-// --- BootServicesを「正確に」定義する（これが一番確実や！） ---
+// ================= GUID =================
 typedef struct {
-    char signature[8]; // "BOOTSERV"
-    unsigned int revision;
-    unsigned int header_size;
-    unsigned int crc32;
-    unsigned int reserved;
+    UINT32 Data1;
+    UINT16 Data2;
+    UINT16 Data3;
+    UINT8  Data4[8];
+} EFI_GUID;
 
-    // ここから関数ポインタ（規格の順番通りに並べるんや！）
-    void *RaiseTPL; void *RestoreTPL;
-    void *AllocatePages; void *FreePages; void *GetMemoryMap; void *AllocatePool; void *FreePool;
-    void *CreateEvent; void *SetTimer; void *WaitForEvent; void *SignalEvent; void *CloseEvent; void *CheckEvent;
-    void *InstallProtocolInterface; void *ReinstallProtocolInterface; void *UninstallProtocolInterface;
-    void *HandleProtocol; void *Void_Reserved; void *RegisterProtocolNotify;
-    void *LocateHandle; void *LocateDevicePath; void *InstallConfigurationTable;
-    void *LoadImage; void *StartImage; void *Exit; void *UnloadImage; void *ExitBootServices;
-    void *GetNextMonotonicCount; void *Stall; void *SetWatchdogTimer;
-    void *ConnectController; void *DisconnectController;
-    void *OpenProtocol; void *CloseProtocol; void *OpenProtocolInformation;
-    void *ProtocolsPerHandle; void *LocateHandleBuffer;
-    
-    // これが本命の LocateProtocol (ついに構造体経由でアクセスや！)
-    EFI_STATUS (EFIAPI *LocateProtocol)(EFI_GUID *Protocol, void *Registration, void **Interface);
-    
-    // ... (以下略)
-} EFI_BOOT_SERVICES;
+// ================= テーブル =================
+typedef struct {
+    UINT64 Signature;
+    UINT32 Revision;
+    UINT32 HeaderSize;
+    UINT32 CRC32;
+    UINT32 Reserved;
+} EFI_TABLE_HEADER;
 
-// シリアル関数群（信頼と実績のコード）
-static inline void outb(unsigned short port, unsigned char val) { __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port)); }
-static inline unsigned char inb(unsigned short port) { unsigned char val; __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port)); return val; }
-void init_serial() { outb(0x3f8 + 1, 0x00); outb(0x3f8 + 3, 0x80); outb(0x3f8 + 0, 0x03); outb(0x3f8 + 1, 0x00); outb(0x3f8 + 3, 0x03); outb(0x3f8 + 2, 0xC7); }
-void serial_puts(const char *s) { while (*s) { while ((inb(0x3f8 + 5) & 0x20) == 0); outb(0x3f8, *s++); } }
+// ================= Boot Services =================
+typedef struct EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
 
-EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, void **SystemTablePtr) {
+typedef EFI_STATUS (EFIAPI *EFI_GET_MEMORY_MAP)(
+    UINT64 *, void *, UINT64 *, UINT64 *, UINT32 *);
+
+typedef EFI_STATUS (EFIAPI *EFI_ALLOCATE_POOL)(
+    UINT32, UINT64, void **);
+
+typedef EFI_STATUS (EFIAPI *EFI_EXIT_BOOT_SERVICES)(
+    EFI_HANDLE, UINT64);
+
+typedef EFI_STATUS (EFIAPI *EFI_LOCATE_PROTOCOL)(
+    EFI_GUID *, void *, void **);
+
+struct EFI_BOOT_SERVICES {
+    EFI_TABLE_HEADER Hdr;
+
+    void *RaiseTPL;
+    void *RestoreTPL;
+    void *AllocatePages;
+    void *FreePages;
+    EFI_GET_MEMORY_MAP GetMemoryMap;
+    EFI_ALLOCATE_POOL AllocatePool;
+    void *FreePool;
+    void *CreateEvent;
+    void *SetTimer;
+    void *WaitForEvent;
+    void *SignalEvent;
+    void *CloseEvent;
+    void *CheckEvent;
+    void *InstallProtocolInterface;
+    void *ReinstallProtocolInterface;
+    void *UninstallProtocolInterface;
+    void *HandleProtocol;
+    void *Reserved;
+    void *RegisterProtocolNotify;
+    void *LocateHandle;
+    void *LocateDevicePath;
+    void *InstallConfigurationTable;
+    void *LoadImage;
+    void *StartImage;
+    void *Exit;
+    void *UnloadImage;
+    EFI_EXIT_BOOT_SERVICES ExitBootServices;
+    void *GetNextMonotonicCount;
+    void *Stall;
+    void *SetWatchdogTimer;
+    void *ConnectController;
+    void *DisconnectController;
+    void *OpenProtocol;
+    void *CloseProtocol;
+    void *OpenProtocolInformation;
+    void *ProtocolsPerHandle;
+    void *LocateHandleBuffer;
+    EFI_LOCATE_PROTOCOL LocateProtocol;
+    void *InstallMultipleProtocolInterfaces;
+    void *UninstallMultipleProtocolInterfaces;
+    void *CalculateCrc32;
+    void *CopyMem;
+    void *SetMem;
+    void *CreateEventEx;
+};
+
+// ================= System Table =================
+typedef struct {
+    EFI_TABLE_HEADER Hdr;
+    void *FirmwareVendor;
+    UINT32 FirmwareRevision;
+    void *padding[6];
+    void *RuntimeServices;
+    EFI_BOOT_SERVICES *BootServices;
+} EFI_SYSTEM_TABLE;
+
+// ================= GOP =================
+typedef struct {
+    UINT32 Version;
+    UINT32 HorizontalResolution;
+    UINT32 VerticalResolution;
+    UINT32 PixelFormat;
+    UINT32 PixelInformation[4];
+    UINT32 PixelsPerScanLine;
+} EFI_GOP_INFO;
+
+typedef struct {
+    UINT32 MaxMode;
+    UINT32 Mode;
+    EFI_GOP_INFO *Info;
+    UINT64 SizeOfInfo;
+    UINT64 FrameBufferBase;
+    UINT64 FrameBufferSize;
+} EFI_GOP_MODE;
+
+typedef struct {
+    void *QueryMode;
+    void *SetMode;
+    void *Blt;
+    EFI_GOP_MODE *Mode;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL;
+
+// ================= シリアル =================
+static inline void outb(UINT16 port, UINT8 val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+static inline UINT8 inb(UINT16 port) {
+    UINT8 v;
+    __asm__ volatile ("inb %1, %0" : "=a"(v) : "Nd"(port));
+    return v;
+}
+void init_serial() {
+    outb(0x3f8+1,0);
+    outb(0x3f8+3,0x80);
+    outb(0x3f8+0,3);
+    outb(0x3f8+1,0);
+    outb(0x3f8+3,3);
+    outb(0x3f8+2,0xC7);
+}
+void serial_puts(const char *s) {
+    while(*s){
+        while(!(inb(0x3f8+5)&0x20));
+        outb(0x3f8,*s++);
+    }
+}
+
+// ================= メイン =================
+EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
+
     init_serial();
-    serial_puts("\r\n--- Saikyokn OS: Direct Struct Access ---\r\n");
+    serial_puts("\r\n=== Saikyokn OS v3.1: Stable Kernel Entry ===\r\n");
 
-    // BootServicesのアドレスを構造体として解釈
-    EFI_BOOT_SERVICES *BS = (EFI_BOOT_SERVICES *)SystemTablePtr[12];
+    EFI_BOOT_SERVICES *BS = SystemTable->BootServices;
 
-    // 署名チェック
-    if (BS->signature[0] != 'B') {
-        serial_puts("ERROR: Invalid BootServices address!\r\n");
-        while(1);
+    EFI_GUID gop_guid =
+        {0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
+
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
+
+    BS->LocateProtocol(&gop_guid, 0, (void**)&gop);
+
+    UINT32 *vram = (UINT32*)gop->Mode->FrameBufferBase;
+    UINT32 hr = gop->Mode->Info->HorizontalResolution;
+    UINT32 vr = gop->Mode->Info->VerticalResolution;
+    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
+
+    // ================= メモリマップ =================
+    UINT64 map_size = 0, map_key, desc_size;
+    UINT32 desc_ver;
+    void *map_buf = 0;
+
+    BS->GetMemoryMap(&map_size, 0, &map_key, &desc_size, &desc_ver);
+    map_size += 1024;
+
+    BS->AllocatePool(EfiLoaderData, map_size, &map_buf);
+
+    // ================= ExitBootServices =================
+    EFI_STATUS status;
+
+    while (1) {
+        status = BS->GetMemoryMap(&map_size, map_buf, &map_key, &desc_size, &desc_ver);
+        if (status != EFI_SUCCESS) break;
+
+        status = BS->ExitBootServices(ImageHandle, map_key);
+        if (status == EFI_SUCCESS) break;
     }
 
-    EFI_GUID gop_guid = {0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}};
-    void *gop = 0;
+    // ================= 完全独立後 =================
 
-    serial_puts("Locating GOP via Struct...\r\n");
-    
-    // 直接呼び出す！アセンブラを使わなくても、EFIAPIをつけて定義すればGCCがやってくれるんや。
-    EFI_STATUS status = BS->LocateProtocol(&gop_guid, 0, &gop);
+    // 👉 青固定（PixelFormat無視して確実に青にする）
+    UINT32 blue = 0x0000FF;
 
-    if (status == EFI_SUCCESS && gop != 0) {
-        serial_puts("!!! SUCCESS AT LAST !!!\r\n");
-        
-        // VRAM取得（GOP構造体の先頭から40バイト目あたりにあるFBBaseを直接狙う）
-        unsigned long long *fb_ptr = (unsigned long long *)((unsigned char *)gop + 40);
-        unsigned int *vram = (unsigned int *)(*fb_ptr);
-        
-        // 画面を燃えるような「赤(0xFF0000)」にするやで！
-        for(int i=0; i<1000000; i++) vram[i] = 0xFF0000;
-        serial_puts("SCREEN IS RED. WE WON!\r\n");
-    } else {
-        serial_puts("Still Failed. Check GUID or Table definition.\r\n");
+    for (UINT32 y = 0; y < vr; y++) {
+        for (UINT32 x = 0; x < hr; x++) {
+            vram[y * stride + x] = blue;
+        }
     }
 
-    while(1);
-    return 0;
+    draw_string(vram, stride, 100, 100, 0xFFFFFF, "SAIKYOKN OS v3.1");
+    draw_string(vram, stride, 100, 120, 0x00FF00, "KERNEL: ACTIVE");
+    draw_string(vram, stride, 100, 140, 0xFFFF00, "STATUS: INDEPENDENT");
+
+    while (1) {
+        __asm__("hlt");
+    }
+
+    return EFI_SUCCESS;
 }
