@@ -5,194 +5,76 @@ typedef void* EFI_HANDLE;
 #define EFIAPI __attribute__((ms_abi))
 #define EFI_SUCCESS 0
 
-// --- UEFI �\���̒�` ---
+typedef struct { unsigned int Data1; unsigned short Data2; unsigned short Data3; unsigned char Data4[8]; } EFI_GUID;
+
+// --- BootServicesを「正確に」定義する（これが一番確実や！） ---
 typedef struct {
-    unsigned long long Signature;
-    unsigned int Revision;
-    unsigned int HeaderSize;
-    unsigned int CRC32;
-    unsigned int Reserved;
-} EFI_TABLE_HEADER;
+    char signature[8]; // "BOOTSERV"
+    unsigned int revision;
+    unsigned int header_size;
+    unsigned int crc32;
+    unsigned int reserved;
 
-typedef struct {
-    unsigned int Data1;
-    unsigned short Data2;
-    unsigned short Data3;
-    unsigned char Data4[8];
-} EFI_GUID;
-
-typedef struct {
-    int RelativeMovementX;
-    int RelativeMovementY;
-    int RelativeMovementZ;
-    unsigned char LeftButton;
-    unsigned char RightButton;
-} EFI_SIMPLE_POINTER_STATE;
-
-struct _EFI_SIMPLE_POINTER_PROTOCOL;
-typedef EFI_STATUS (EFIAPI *EFI_SIMPLE_POINTER_RESET)(struct _EFI_SIMPLE_POINTER_PROTOCOL *This, unsigned char ExtendedVerification);
-typedef EFI_STATUS (EFIAPI *EFI_SIMPLE_POINTER_GET_STATE)(struct _EFI_SIMPLE_POINTER_PROTOCOL *This, EFI_SIMPLE_POINTER_STATE *State);
-
-typedef struct _EFI_SIMPLE_POINTER_PROTOCOL {
-    EFI_SIMPLE_POINTER_RESET Reset;
-    EFI_SIMPLE_POINTER_GET_STATE GetState;
-    void *WaitForInput;
-} EFI_SIMPLE_POINTER_PROTOCOL;
-
-typedef struct {
-    unsigned int Version;
-    unsigned int HorizontalResolution;
-    unsigned int VerticalResolution;
-    int PixelFormat;
-    unsigned int PixelInformation[4];
-    unsigned int PixelsPerScanLine;
-} EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
-
-typedef struct {
-    unsigned int MaxMode;
-    unsigned int Mode;
-    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
-    unsigned long long SizeOfInfo;
-    unsigned long long FrameBufferBase;
-    unsigned long long FrameBufferSize;
-} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
-
-typedef struct {
-    void *dummy[3];
-    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
-} EFI_GRAPHICS_OUTPUT_PROTOCOL;
-
-typedef struct {
-    EFI_TABLE_HEADER Hdr;
-    void *dummy1[6];
-    void *dummy2[2];
-    void *dummy3[3];
-    void *dummy4[3];
-    void *dummy5[2];
-    void *dummy6[1];
-    void *dummy7[2];
-    void *dummy8[2];
-    void *dummy9[3];
-    void *dummy10[1];
-    void *dummy11[1];
-    void *dummy12[2];
-    void *dummy13[1];
-    void *dummy14[2];
-    void *dummy15[2];
-    void *dummy16[1];
-    void *dummy17[3];
+    // ここから関数ポインタ（規格の順番通りに並べるんや！）
+    void *RaiseTPL; void *RestoreTPL;
+    void *AllocatePages; void *FreePages; void *GetMemoryMap; void *AllocatePool; void *FreePool;
+    void *CreateEvent; void *SetTimer; void *WaitForEvent; void *SignalEvent; void *CloseEvent; void *CheckEvent;
+    void *InstallProtocolInterface; void *ReinstallProtocolInterface; void *UninstallProtocolInterface;
+    void *HandleProtocol; void *Void_Reserved; void *RegisterProtocolNotify;
+    void *LocateHandle; void *LocateDevicePath; void *InstallConfigurationTable;
+    void *LoadImage; void *StartImage; void *Exit; void *UnloadImage; void *ExitBootServices;
+    void *GetNextMonotonicCount; void *Stall; void *SetWatchdogTimer;
+    void *ConnectController; void *DisconnectController;
+    void *OpenProtocol; void *CloseProtocol; void *OpenProtocolInformation;
+    void *ProtocolsPerHandle; void *LocateHandleBuffer;
+    
+    // これが本命の LocateProtocol (ついに構造体経由でアクセスや！)
     EFI_STATUS (EFIAPI *LocateProtocol)(EFI_GUID *Protocol, void *Registration, void **Interface);
+    
+    // ... (以下略)
 } EFI_BOOT_SERVICES;
 
-typedef struct {
-    EFI_TABLE_HEADER Hdr;
-    unsigned short *FirmwareVendor;
-    unsigned int FirmwareRevision;
-    EFI_HANDLE ConsoleInHandle;
-    void *ConIn;
-    EFI_HANDLE ConsoleOutHandle;
-    void *ConOut;
-    EFI_HANDLE StandardErrorHandle;
-    void *StdErr;
-    void *RuntimeServices;
-    EFI_BOOT_SERVICES *BootServices;
-} EFI_SYSTEM_TABLE;
+// シリアル関数群（信頼と実績のコード）
+static inline void outb(unsigned short port, unsigned char val) { __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port)); }
+static inline unsigned char inb(unsigned short port) { unsigned char val; __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port)); return val; }
+void init_serial() { outb(0x3f8 + 1, 0x00); outb(0x3f8 + 3, 0x80); outb(0x3f8 + 0, 0x03); outb(0x3f8 + 1, 0x00); outb(0x3f8 + 3, 0x03); outb(0x3f8 + 2, 0xC7); }
+void serial_puts(const char *s) { while (*s) { while ((inb(0x3f8 + 5) & 0x20) == 0); outb(0x3f8, *s++); } }
 
-// --- ���[�e�B���e�B�֐� ---
+EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, void **SystemTablePtr) {
+    init_serial();
+    serial_puts("\r\n--- Saikyokn OS: Direct Struct Access ---\r\n");
 
-void fill_rect(unsigned int *vram, unsigned int stride, int x, int y, int w, int h, unsigned int color) {
-    for (int i = y; i < y + h; i++) {
-        for (int j = x; j < x + w; j++) {
-            vram[i * stride + j] = color;
-        }
+    // BootServicesのアドレスを構造体として解釈
+    EFI_BOOT_SERVICES *BS = (EFI_BOOT_SERVICES *)SystemTablePtr[12];
+
+    // 署名チェック
+    if (BS->signature[0] != 'B') {
+        serial_puts("ERROR: Invalid BootServices address!\r\n");
+        while(1);
     }
-}
 
-void itoa_hex(unsigned long long val, char *str) {
-    const char *hex_chars = "0123456789ABCDEF";
-    for (int i = 15; i >= 0; i--) {
-        str[i] = hex_chars[val & 0xF];
-        val >>= 4;
-    }
-    str[16] = '\0';
-}
-
-void itoa_dec(int val, char *str) {
-    int i = 0;
-    if (val < 0) {
-        str[i++] = '-';
-        val = -val;
-    }
-    char tmp[10];
-    int j = 0;
-    if (val == 0) tmp[j++] = '0';
-    while (val > 0) {
-        tmp[j++] = (val % 10) + '0';
-        val /= 10;
-    }
-    while (j > 0) str[i++] = tmp[--j];
-    str[i] = '\0';
-}
-
-// --- ���C�����[�`�� ---
-
-EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     EFI_GUID gop_guid = {0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}};
-    EFI_GUID mouse_guid = {0x31878c87, 0x0b75, 0x11d5, {0x9a, 0x4f, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}};
+    void *gop = 0;
+
+    serial_puts("Locating GOP via Struct...\r\n");
     
-    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
-    EFI_SIMPLE_POINTER_PROTOCOL *mouse = 0;
+    // 直接呼び出す！アセンブラを使わなくても、EFIAPIをつけて定義すればGCCがやってくれるんや。
+    EFI_STATUS status = BS->LocateProtocol(&gop_guid, 0, &gop);
 
-    SystemTable->BootServices->LocateProtocol(&gop_guid, 0, (void**)&gop);
-    EFI_STATUS m_stat = SystemTable->BootServices->LocateProtocol(&mouse_guid, 0, (void**)&mouse);
-
-    if (gop) {
-        unsigned int *vram = (unsigned int *)gop->Mode->FrameBufferBase;
-        unsigned int stride = gop->Mode->Info->PixelsPerScanLine;
-        unsigned int width = gop->Mode->Info->HorizontalResolution;
-        unsigned int height = gop->Mode->Info->VerticalResolution;
-
-        // �w�i�h��Ԃ�
-        fill_rect(vram, stride, 0, 0, width, height, 0x000080);
+    if (status == EFI_SUCCESS && gop != 0) {
+        serial_puts("!!! SUCCESS AT LAST !!!\r\n");
         
-        draw_string(vram, stride, 10, 10, 0xFFFFFF, "SAIKYOKN OS REALTIME DEBUGGER");
-
-        char buf[32];
-        itoa_hex(m_stat, buf);
-        draw_string(vram, stride, 10, 40, 0xFFFFFF, "Mouse Protocol Stat: 0x");
-        draw_string(vram, stride, 194, 40, (m_stat == 0) ? 0x00FF00 : 0xFF0000, buf);
-
-        if (m_stat == EFI_SUCCESS && mouse) {
-            mouse->Reset(mouse, 0);
-            int cur_x = width / 2;
-            int cur_y = height / 2;
-
-            while (1) {
-                EFI_SIMPLE_POINTER_STATE ms;
-                if (mouse->GetState(mouse, &ms) == EFI_SUCCESS) {
-                    // ���l�\���G���A�̏���
-                    fill_rect(vram, stride, 10, 70, 200, 100, 0x000080);
-
-                    cur_x += ms.RelativeMovementX / 2;
-                    cur_y += ms.RelativeMovementY / 2;
-                    
-                    // ���W�\��
-                    draw_string(vram, stride, 10, 70, 0xFFFF00, "X: ");
-                    itoa_dec(cur_x, buf);
-                    draw_string(vram, stride, 40, 70, 0xFFFFFF, buf);
-
-                    draw_string(vram, stride, 10, 90, 0xFFFF00, "Y: ");
-                    itoa_dec(cur_y, buf);
-                    draw_string(vram, stride, 40, 90, 0xFFFFFF, buf);
-
-                    draw_string(vram, stride, 10, 110, 0xFFFF00, "Buttons: ");
-                    if (ms.LeftButton) draw_string(vram, stride, 80, 110, 0xFF0000, "LEFT ");
-                    if (ms.RightButton) draw_string(vram, stride, 130, 110, 0xFF0000, "RIGHT");
-                }
-            }
-        } else {
-            draw_string(vram, stride, 10, 70, 0xFF0000, "ERROR: MOUSE NOT DETECTED");
-        }
+        // VRAM取得（GOP構造体の先頭から40バイト目あたりにあるFBBaseを直接狙う）
+        unsigned long long *fb_ptr = (unsigned long long *)((unsigned char *)gop + 40);
+        unsigned int *vram = (unsigned int *)(*fb_ptr);
+        
+        // 画面を燃えるような「赤(0xFF0000)」にするやで！
+        for(int i=0; i<1000000; i++) vram[i] = 0xFF0000;
+        serial_puts("SCREEN IS RED. WE WON!\r\n");
+    } else {
+        serial_puts("Still Failed. Check GUID or Table definition.\r\n");
     }
+
+    while(1);
     return 0;
 }
