@@ -1,23 +1,15 @@
 .global irq1_wrapper
-.extern irq1_handler_c
+.extern kb_push
 
 irq1_wrapper:
     pushq %rax
-    pushq %rbx
-    pushq %rcx
-    pushq %rdx
-    pushq %rsi
-    pushq %rdi
-    pushq %rbp
 
-    call irq1_handler_c
+    inb $0x60, %al
+    mov %al, %dil
+    call kb_push
 
-    popq %rbp
-    popq %rdi
-    popq %rsi
-    popq %rdx
-    popq %rcx
-    popq %rbx
+    movb $0x20, %al
+    outb %al, $0x20
+
     popq %rax
-
     iretq

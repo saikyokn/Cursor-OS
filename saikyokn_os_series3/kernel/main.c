@@ -1,4 +1,5 @@
 #include "font.h"
+#include "console.h"
 
 // ================= 基本型 =================
 typedef unsigned long long UINT64;
@@ -12,13 +13,35 @@ typedef void*              EFI_HANDLE;
 #define EFI_SUCCESS 0
 #define EfiLoaderData 4
 
-// ================= 外部（追加） =================
 extern void irq1_wrapper();
-extern void input_push(char);
-extern int input_pop();
+
+// ================= キーボードバッファ =================
+#define KB_BUF 256
+volatile char kb_buf[KB_BUF];
+volatile UINT32 kb_head = 0;
+volatile UINT32 kb_tail = 0;
+
+// asmから呼ばれる
+__attribute__((sysv_abi))
+void kb_push(char c){
+    kb_buf[kb_head] = c;
+    kb_head = (kb_head + 1) % KB_BUF;
+}
+
+int kb_pop(){
+    if(kb_head == kb_tail) return -1;
+    char c = kb_buf[kb_tail];
+    kb_tail = (kb_tail + 1) % KB_BUF;
+    return c;
+}
 
 // ================= GUID =================
-typedef struct { UINT32 Data1; UINT16 Data2; UINT16 Data3; UINT8 Data4[8]; } EFI_GUID;
+typedef struct {
+    UINT32 Data1;
+    UINT16 Data2;
+    UINT16 Data3;
+    UINT8  Data4[8];
+} EFI_GUID;
 
 // ================= テーブル =================
 typedef struct {
@@ -39,18 +62,51 @@ typedef EFI_STATUS (EFIAPI *EFI_LOCATE_PROTOCOL)(EFI_GUID *, void *, void **);
 
 struct EFI_BOOT_SERVICES {
     EFI_TABLE_HEADER Hdr;
-    void *RaiseTPL; void *RestoreTPL; void *AllocatePages; void *FreePages;
-    EFI_GET_MEMORY_MAP GetMemoryMap; EFI_ALLOCATE_POOL AllocatePool; void *FreePool;
-    void *CreateEvent; void *SetTimer; void *WaitForEvent; void *SignalEvent; void *CloseEvent;
-    void *CheckEvent; void *InstallProtocolInterface; void *ReinstallProtocolInterface;
-    void *UninstallProtocolInterface; void *HandleProtocol; void *Reserved; void *RegisterProtocolNotify;
-    void *LocateHandle; void *LocateDevicePath; void *InstallConfigurationTable; void *LoadImage;
-    void *StartImage; void *Exit; void *UnloadImage; EFI_EXIT_BOOT_SERVICES ExitBootServices;
-    void *GetNextMonotonicCount; void *Stall; void *SetWatchdogTimer; void *ConnectController;
-    void *DisconnectController; void *OpenProtocol; void *CloseProtocol; void *OpenProtocolInformation;
-    void *ProtocolsPerHandle; void *LocateHandleBuffer; EFI_LOCATE_PROTOCOL LocateProtocol;
-    void *InstallMultipleProtocolInterfaces; void *UninstallMultipleProtocolInterfaces;
-    void *CalculateCrc32; void *CopyMem; void *SetMem; void *CreateEventEx;
+
+    void *RaiseTPL;
+    void *RestoreTPL;
+    void *AllocatePages;
+    void *FreePages;
+    EFI_GET_MEMORY_MAP GetMemoryMap;
+    EFI_ALLOCATE_POOL AllocatePool;
+    void *FreePool;
+    void *CreateEvent;
+    void *SetTimer;
+    void *WaitForEvent;
+    void *SignalEvent;
+    void *CloseEvent;
+    void *CheckEvent;
+    void *InstallProtocolInterface;
+    void *ReinstallProtocolInterface;
+    void *UninstallProtocolInterface;
+    void *HandleProtocol;
+    void *Reserved;
+    void *RegisterProtocolNotify;
+    void *LocateHandle;
+    void *LocateDevicePath;
+    void *InstallConfigurationTable;
+    void *LoadImage;
+    void *StartImage;
+    void *Exit;
+    void *UnloadImage;
+    EFI_EXIT_BOOT_SERVICES ExitBootServices;
+    void *GetNextMonotonicCount;
+    void *Stall;
+    void *SetWatchdogTimer;
+    void *ConnectController;
+    void *DisconnectController;
+    void *OpenProtocol;
+    void *CloseProtocol;
+    void *OpenProtocolInformation;
+    void *ProtocolsPerHandle;
+    void *LocateHandleBuffer;
+    EFI_LOCATE_PROTOCOL LocateProtocol;
+    void *InstallMultipleProtocolInterfaces;
+    void *UninstallMultipleProtocolInterfaces;
+    void *CalculateCrc32;
+    void *CopyMem;
+    void *SetMem;
+    void *CreateEventEx;
 };
 
 // ================= System Table =================
@@ -58,7 +114,12 @@ typedef struct {
     EFI_TABLE_HEADER Hdr;
     void *FirmwareVendor;
     UINT32 FirmwareRevision;
-    void *padding[6];
+    void *ConsoleInHandle;
+    void *ConIn;
+    void *ConsoleOutHandle;
+    void *ConOut;
+    void *StandardErrorHandle;
+    void *StdErr;
     void *RuntimeServices;
     EFI_BOOT_SERVICES *BootServices;
 } EFI_SYSTEM_TABLE;
@@ -91,13 +152,10 @@ typedef struct {
 
 // ================= IDT =================
 struct IDTEntry {
-    UINT16 offset_low;
-    UINT16 selector;
-    UINT8  ist;
-    UINT8  type_attr;
+    UINT16 offset_low, selector;
+    UINT8 ist, type_attr;
     UINT16 offset_mid;
-    UINT32 offset_high;
-    UINT32 zero;
+    UINT32 offset_high, zero;
 } __attribute__((packed));
 
 struct IDTR {
@@ -107,33 +165,10 @@ struct IDTR {
 
 struct IDTEntry idt[256];
 
-// ================= シリアル =================
-#define COM1_PORT 0x3F8
-static inline void serial_write_char(char c){
-    while(!(*(volatile UINT8*)(COM1_PORT+5)&0x20));
-    *(volatile UINT8*)(COM1_PORT)=c;
+__attribute__((naked))
+void dummy_isr(){
+    __asm__("iretq");
 }
-
-// ================= PIC =================
-void pic_init(){
-    *(volatile UINT8*)0x20=0x11;
-    *(volatile UINT8*)0xA0=0x11;
-
-    *(volatile UINT8*)0x21=0x20;
-    *(volatile UINT8*)0xA1=0x28;
-
-    *(volatile UINT8*)0x21=0x04;
-    *(volatile UINT8*)0xA1=0x02;
-
-    *(volatile UINT8*)0x21=0x01;
-    *(volatile UINT8*)0xA1=0x01;
-
-    *(volatile UINT8*)0x21=0xFD;
-    *(volatile UINT8*)0xA1=0xFF;
-}
-
-// ================= IDT設定 =================
-void dummy_isr(){ __asm__ volatile("iretq"); }
 
 void set_idt_entry(int vec, void* handler){
     UINT64 addr = (UINT64)handler;
@@ -155,91 +190,84 @@ void load_idt(){
     __asm__ volatile ("lidt %0" : : "m"(idtr));
 }
 
-// ================= Keyboard =================
-char scancode_to_ascii[128]={
-0,27,'1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
-'q','w','e','r','t','y','u','i','o','p','[',']','\n',0,
-'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\',
-'z','x','c','v','b','n','m',',','.','/',0,'*',0,' '
-};
+// ================= PIC =================
+void pic_init(){
+    *(volatile UINT8*)0x20 = 0x11;
+    *(volatile UINT8*)0xA0 = 0x11;
+    *(volatile UINT8*)0x21 = 0x20;
+    *(volatile UINT8*)0xA1 = 0x28;
+    *(volatile UINT8*)0x21 = 0x04;
+    *(volatile UINT8*)0xA1 = 0x02;
+    *(volatile UINT8*)0x21 = 0x01;
+    *(volatile UINT8*)0xA1 = 0x01;
 
-// ================= IRQ1 Cハンドラ =================
-void irq1_handler_c(){
-    UINT8 sc = *(volatile UINT8*)0x60;
-
-    if(sc < 128){
-        char c = scancode_to_ascii[sc];
-        if(c){
-            serial_write_char(c);
-            input_push(c);
-        }
-    }
-
-    *(volatile UINT8*)0x20 = 0x20;
+    *(volatile UINT8*)0x21 = 0xFD;
+    *(volatile UINT8*)0xA1 = 0xFF;
 }
 
-// ================= メイン =================
+// ================= MAIN =================
 EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable){
 
     EFI_BOOT_SERVICES *BS = SystemTable->BootServices;
 
-    // GOP
+    // ================= GOP =================
     EFI_GUID gop_guid =
         {0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
 
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
     BS->LocateProtocol(&gop_guid, 0, (void**)&gop);
 
-    UINT32 *vram = (UINT32*)gop->Mode->FrameBufferBase;
-    UINT32 hr = gop->Mode->Info->HorizontalResolution;
-    UINT32 vr = gop->Mode->Info->VerticalResolution;
-    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
+    UINT32 *vram   = (UINT32*)gop->Mode->FrameBufferBase;
+    UINT32 stride  = gop->Mode->Info->PixelsPerScanLine;
 
-    // ExitBootServices
-    UINT64 map_size=0,map_key,desc_size;
+    // ================= ExitBootServices =================
+    UINT64 map_size=0, map_key, desc_size;
     UINT32 desc_ver;
     void *map_buf=0;
 
     BS->GetMemoryMap(&map_size,0,&map_key,&desc_size,&desc_ver);
-    map_size+=1024;
+    map_size += 1024;
     BS->AllocatePool(EfiLoaderData,map_size,&map_buf);
 
     while(1){
         if(BS->GetMemoryMap(&map_size,map_buf,&map_key,&desc_size,&desc_ver)!=EFI_SUCCESS)
             break;
+
         if(BS->ExitBootServices(ImageHandle,map_key)==EFI_SUCCESS)
             break;
     }
 
-    // IDT + PIC
-    for(int i=0;i<256;i++) set_idt_entry(i,dummy_isr);
-    set_idt_entry(0x21, irq1_wrapper); // ★重要
+    // ================= IDT + IRQ =================
+    for(int i=0;i<256;i++)
+        set_idt_entry(i,dummy_isr);
+
+    set_idt_entry(0x21, irq1_wrapper);
 
     pic_init();
     load_idt();
     __asm__("sti");
 
-    // 背景
-    for(UINT32 y=0;y<vr;y++)
-        for(UINT32 x=0;x<hr;x++)
-            vram[y*stride+x]=0x00202020;
+    // ================= コンソール =================
+    console_init(vram, stride);
 
-    draw_string(vram,stride,100,100,0xFFFFFF,"TRUE CORE READY");
+    console_write("SAIKYOKN OS CONSOLE READY\n");
+    console_write("> ");
+    console_render();
 
-    UINT32 cx=100,cy=140;
-
+    // ================= メインループ =================
     while(1){
-        int c = input_pop();
+
+        int c = kb_pop();
+
         if(c != -1){
 
-            if(c=='\b'){ if(cx>100) cx-=8; continue; }
-            if(c=='\n'){ cx=100; cy+=16; continue; }
+            console_putc((char)c);
 
-            draw_char(vram,stride,cx,cy,0xFFFFFF,c);
-            cx+=8;
+            if(c == '\n'){
+                console_write("> ");
+            }
 
-            if(cx>hr-8){ cx=100; cy+=16; }
-            if(cy>vr-16){ cy=140; }
+            console_render();
         }
 
         __asm__("hlt");
