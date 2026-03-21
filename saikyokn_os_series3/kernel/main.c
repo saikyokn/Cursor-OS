@@ -1,5 +1,6 @@
 #include "font.h"
 
+// ================= 基本型 =================
 typedef unsigned long long UINT64;
 typedef unsigned int       UINT32;
 typedef unsigned short     UINT16;
@@ -11,11 +12,26 @@ typedef void*              EFI_HANDLE;
 #define EFI_SUCCESS 0
 #define EfiLoaderData 4
 
-// ================= GUID / Table =================
-typedef struct { UINT32 Data1; UINT16 Data2; UINT16 Data3; UINT8 Data4[8]; } EFI_GUID;
-typedef struct { UINT64 Signature; UINT32 Revision; UINT32 HeaderSize; UINT32 CRC32; UINT32 Reserved; } EFI_TABLE_HEADER;
+// ================= 外部（追加） =================
+extern void irq1_wrapper();
+extern void input_push(char);
+extern int input_pop();
 
+// ================= GUID =================
+typedef struct { UINT32 Data1; UINT16 Data2; UINT16 Data3; UINT8 Data4[8]; } EFI_GUID;
+
+// ================= テーブル =================
+typedef struct {
+    UINT64 Signature;
+    UINT32 Revision;
+    UINT32 HeaderSize;
+    UINT32 CRC32;
+    UINT32 Reserved;
+} EFI_TABLE_HEADER;
+
+// ================= Boot Services =================
 typedef struct EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
+
 typedef EFI_STATUS (EFIAPI *EFI_GET_MEMORY_MAP)(UINT64 *, void *, UINT64 *, UINT64 *, UINT32 *);
 typedef EFI_STATUS (EFIAPI *EFI_ALLOCATE_POOL)(UINT32, UINT64, void **);
 typedef EFI_STATUS (EFIAPI *EFI_EXIT_BOOT_SERVICES)(EFI_HANDLE, UINT64);
@@ -37,135 +53,195 @@ struct EFI_BOOT_SERVICES {
     void *CalculateCrc32; void *CopyMem; void *SetMem; void *CreateEventEx;
 };
 
-typedef struct { EFI_TABLE_HEADER Hdr; void *FirmwareVendor; UINT32 FirmwareRevision; void *padding[6]; void *RuntimeServices; EFI_BOOT_SERVICES *BootServices; } EFI_SYSTEM_TABLE;
+// ================= System Table =================
+typedef struct {
+    EFI_TABLE_HEADER Hdr;
+    void *FirmwareVendor;
+    UINT32 FirmwareRevision;
+    void *padding[6];
+    void *RuntimeServices;
+    EFI_BOOT_SERVICES *BootServices;
+} EFI_SYSTEM_TABLE;
 
 // ================= GOP =================
-typedef struct { UINT32 Version, HorizontalResolution, VerticalResolution, PixelFormat, PixelInformation[4], PixelsPerScanLine; } EFI_GOP_INFO;
-typedef struct { UINT32 MaxMode, Mode; EFI_GOP_INFO *Info; UINT64 SizeOfInfo, FrameBufferBase, FrameBufferSize; } EFI_GOP_MODE;
-typedef struct { void *QueryMode, *SetMode, *Blt; EFI_GOP_MODE *Mode; } EFI_GRAPHICS_OUTPUT_PROTOCOL;
+typedef struct {
+    UINT32 Version;
+    UINT32 HorizontalResolution;
+    UINT32 VerticalResolution;
+    UINT32 PixelFormat;
+    UINT32 PixelInformation[4];
+    UINT32 PixelsPerScanLine;
+} EFI_GOP_INFO;
 
-// ================= PMM =================
-typedef struct { UINT32 Type, Pad; UINT64 PhysicalStart, VirtualStart, NumberOfPages, Attribute; } EFI_MEMORY_DESCRIPTOR;
-typedef struct { UINT64 base, size; } MemoryRegion;
-#define MAX_REGIONS 128
-MemoryRegion regions[MAX_REGIONS]; UINT32 region_count = 0;
+typedef struct {
+    UINT32 MaxMode;
+    UINT32 Mode;
+    EFI_GOP_INFO *Info;
+    UINT64 SizeOfInfo;
+    UINT64 FrameBufferBase;
+    UINT64 FrameBufferSize;
+} EFI_GOP_MODE;
 
-void init_pmm(void *map, UINT64 map_size, UINT64 desc_size){
-    UINT8 *ptr = (UINT8*)map;
-    for(UINT64 i=0;i<map_size;i+=desc_size){
-        EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR*)(ptr+i);
-        if(desc->Type==7 && region_count<MAX_REGIONS){
-            regions[region_count].base=desc->PhysicalStart;
-            regions[region_count].size=desc->NumberOfPages*4096;
-            region_count++;
-        }
-    }
-}
-
-// ================= HEAP =================
-UINT64 heap_current, heap_end;
-void init_heap(){ if(region_count==0)return; heap_current=regions[0].base; heap_end=regions[0].base+regions[0].size; }
-void* kmalloc(UINT64 size){ size=(size+7)&~7; if(heap_current+size>heap_end) return 0; void *ptr=(void*)heap_current; heap_current+=size; return ptr; }
+typedef struct {
+    void *QueryMode;
+    void *SetMode;
+    void *Blt;
+    EFI_GOP_MODE *Mode;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
 // ================= IDT =================
-struct IDTEntry{ UINT16 offset_low, selector; UINT8 ist,type_attr; UINT16 offset_mid; UINT32 offset_high, zero; } __attribute__((packed));
-struct IDTR{ UINT16 limit; UINT64 base; } __attribute__((packed));
+struct IDTEntry {
+    UINT16 offset_low;
+    UINT16 selector;
+    UINT8  ist;
+    UINT8  type_attr;
+    UINT16 offset_mid;
+    UINT32 offset_high;
+    UINT32 zero;
+} __attribute__((packed));
+
+struct IDTR {
+    UINT16 limit;
+    UINT64 base;
+} __attribute__((packed));
+
 struct IDTEntry idt[256];
-
-void dummy_isr(){ __asm__ volatile("iretq"); }
-void irq1_handler(); // 後で定義
-
-void set_idt_entry(int vec, void *handler){
-    UINT64 addr=(UINT64)handler;
-    idt[vec].offset_low=addr&0xFFFF;
-    idt[vec].selector=0x08; idt[vec].ist=0; idt[vec].type_attr=0x8E;
-    idt[vec].offset_mid=(addr>>16)&0xFFFF; idt[vec].offset_high=(addr>>32); idt[vec].zero=0;
-}
-void load_idt(){ struct IDTR idtr={sizeof(idt)-1,(UINT64)&idt}; __asm__ volatile("lidt %0"::"m"(idtr)); }
-void pic_init(){
-    *(volatile UINT8*)0x20=0x11; *(volatile UINT8*)0xA0=0x11;
-    *(volatile UINT8*)0x21=0x20; *(volatile UINT8*)0xA1=0x28;
-    *(volatile UINT8*)0x21=0x04; *(volatile UINT8*)0xA1=0x02;
-    *(volatile UINT8*)0x21=0x01; *(volatile UINT8*)0xA1=0x01;
-    *(volatile UINT8*)0x21=0xFD; *(volatile UINT8*)0xA1=0xFF;
-}
 
 // ================= シリアル =================
 #define COM1_PORT 0x3F8
 static inline void serial_write_char(char c){
-    while(!(*(volatile UINT8*)(COM1_PORT+5)&0x20)); 
+    while(!(*(volatile UINT8*)(COM1_PORT+5)&0x20));
     *(volatile UINT8*)(COM1_PORT)=c;
 }
-static void serial_write(const char *s){ while(*s) serial_write_char(*s++); }
 
-// ================= Keyboard =================
-#define KB_BUFFER_SIZE 256
-volatile char kb_buffer[KB_BUFFER_SIZE]; volatile UINT32 kb_head=0,kb_tail=0;
-char scancode_to_ascii[128]={0,27,'1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
-'q','w','e','r','t','y','u','i','o','p','[',']','\n',0,'a','s','d','f','g','h','j','k','l',
-';','\'','`',0,'\\','z','x','c','v','b','n','m',',','.','/',0,'*',0,' '};
+// ================= PIC =================
+void pic_init(){
+    *(volatile UINT8*)0x20=0x11;
+    *(volatile UINT8*)0xA0=0x11;
 
-void irq1_handler(){
-    UINT8 sc = *(volatile UINT8*)0x60;
-    if(sc<128){
-        char c = scancode_to_ascii[sc];
-        if(c){
-            // シリアル出力
-            serial_write_char(c);
+    *(volatile UINT8*)0x21=0x20;
+    *(volatile UINT8*)0xA1=0x28;
 
-            // バッファにも格納
-            kb_buffer[kb_head]=c;
-            kb_head=(kb_head+1)%KB_BUFFER_SIZE;
-        }
-    }
-    // PIC EOI
-    *(volatile UINT8*)0x20=0x20;
-    *(volatile UINT8*)0xA0=0x20;
-    __asm__("iretq");
+    *(volatile UINT8*)0x21=0x04;
+    *(volatile UINT8*)0xA1=0x02;
+
+    *(volatile UINT8*)0x21=0x01;
+    *(volatile UINT8*)0xA1=0x01;
+
+    *(volatile UINT8*)0x21=0xFD;
+    *(volatile UINT8*)0xA1=0xFF;
 }
 
-// ================= MAIN =================
+// ================= IDT設定 =================
+void dummy_isr(){ __asm__ volatile("iretq"); }
+
+void set_idt_entry(int vec, void* handler){
+    UINT64 addr = (UINT64)handler;
+
+    idt[vec].offset_low  = addr & 0xFFFF;
+    idt[vec].selector    = 0x08;
+    idt[vec].ist         = 0;
+    idt[vec].type_attr   = 0x8E;
+    idt[vec].offset_mid  = (addr >> 16) & 0xFFFF;
+    idt[vec].offset_high = (addr >> 32);
+    idt[vec].zero        = 0;
+}
+
+void load_idt(){
+    struct IDTR idtr;
+    idtr.limit = sizeof(idt) - 1;
+    idtr.base  = (UINT64)&idt;
+
+    __asm__ volatile ("lidt %0" : : "m"(idtr));
+}
+
+// ================= Keyboard =================
+char scancode_to_ascii[128]={
+0,27,'1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
+'q','w','e','r','t','y','u','i','o','p','[',']','\n',0,
+'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\',
+'z','x','c','v','b','n','m',',','.','/',0,'*',0,' '
+};
+
+// ================= IRQ1 Cハンドラ =================
+void irq1_handler_c(){
+    UINT8 sc = *(volatile UINT8*)0x60;
+
+    if(sc < 128){
+        char c = scancode_to_ascii[sc];
+        if(c){
+            serial_write_char(c);
+            input_push(c);
+        }
+    }
+
+    *(volatile UINT8*)0x20 = 0x20;
+}
+
+// ================= メイン =================
 EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable){
-    EFI_BOOT_SERVICES *BS=SystemTable->BootServices;
+
+    EFI_BOOT_SERVICES *BS = SystemTable->BootServices;
 
     // GOP
-    EFI_GUID gop_guid={0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
-    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=0;
-    BS->LocateProtocol(&gop_guid,0,(void**)&gop);
-    UINT32 *vram=(UINT32*)gop->Mode->FrameBufferBase;
-    UINT32 hr=gop->Mode->Info->HorizontalResolution;
-    UINT32 vr=gop->Mode->Info->VerticalResolution;
-    UINT32 stride=gop->Mode->Info->PixelsPerScanLine;
+    EFI_GUID gop_guid =
+        {0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
 
-    // メモリマップ
-    UINT64 map_size=0,map_key,desc_size; UINT32 desc_ver; void *map_buf=0;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
+    BS->LocateProtocol(&gop_guid, 0, (void**)&gop);
+
+    UINT32 *vram = (UINT32*)gop->Mode->FrameBufferBase;
+    UINT32 hr = gop->Mode->Info->HorizontalResolution;
+    UINT32 vr = gop->Mode->Info->VerticalResolution;
+    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
+
+    // ExitBootServices
+    UINT64 map_size=0,map_key,desc_size;
+    UINT32 desc_ver;
+    void *map_buf=0;
+
     BS->GetMemoryMap(&map_size,0,&map_key,&desc_size,&desc_ver);
-    map_size+=1024; BS->AllocatePool(EfiLoaderData,map_size,&map_buf);
+    map_size+=1024;
+    BS->AllocatePool(EfiLoaderData,map_size,&map_buf);
+
     while(1){
-        if(BS->GetMemoryMap(&map_size,map_buf,&map_key,&desc_size,&desc_ver)!=EFI_SUCCESS) break;
-        if(BS->ExitBootServices(ImageHandle,map_key)==EFI_SUCCESS) break;
+        if(BS->GetMemoryMap(&map_size,map_buf,&map_key,&desc_size,&desc_ver)!=EFI_SUCCESS)
+            break;
+        if(BS->ExitBootServices(ImageHandle,map_key)==EFI_SUCCESS)
+            break;
     }
-    init_pmm(map_buf,map_size,desc_size); init_heap(); kmalloc(64);
 
     // IDT + PIC
     for(int i=0;i<256;i++) set_idt_entry(i,dummy_isr);
-    set_idt_entry(1,irq1_handler);
-    pic_init(); load_idt(); __asm__("sti");
+    set_idt_entry(0x21, irq1_wrapper); // ★重要
+
+    pic_init();
+    load_idt();
+    __asm__("sti");
 
     // 背景
-    for(UINT32 y=0;y<vr;y++) for(UINT32 x=0;x<hr;x++) vram[y*stride+x]=0x00202020;
-    draw_string(vram,stride,100,100,0xFFFFFF,"STABLE CORE OK");
-    draw_string(vram,stride,100,120,0x00FF00,"PMM / SAFE KMALLOC / IDT / KEYBOARD READY");
+    for(UINT32 y=0;y<vr;y++)
+        for(UINT32 x=0;x<hr;x++)
+            vram[y*stride+x]=0x00202020;
+
+    draw_string(vram,stride,100,100,0xFFFFFF,"TRUE CORE READY");
 
     UINT32 cx=100,cy=140;
+
     while(1){
-        while(kb_tail!=kb_head){
-            char c=kb_buffer[kb_tail]; kb_tail=(kb_tail+1)%KB_BUFFER_SIZE;
+        int c = input_pop();
+        if(c != -1){
+
             if(c=='\b'){ if(cx>100) cx-=8; continue; }
-            if(c=='\n'){ cx=100; cy+=16; if(cy>vr-16) cy=140; continue; }
-            draw_char(vram,stride,cx,cy,0xFFFFFF,c); cx+=8;
-            if(cx>hr-8){ cx=100; cy+=16; if(cy>vr-16) cy=140; }
+            if(c=='\n'){ cx=100; cy+=16; continue; }
+
+            draw_char(vram,stride,cx,cy,0xFFFFFF,c);
+            cx+=8;
+
+            if(cx>hr-8){ cx=100; cy+=16; }
+            if(cy>vr-16){ cy=140; }
         }
+
         __asm__("hlt");
     }
 
