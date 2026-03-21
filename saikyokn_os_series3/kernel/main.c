@@ -83,31 +83,42 @@ void set_idt_entry(int vec, void *handler){
 }
 void load_idt(){ struct IDTR idtr={sizeof(idt)-1,(UINT64)&idt}; __asm__ volatile("lidt %0"::"m"(idtr)); }
 void pic_init(){
-    // ICW1
     *(volatile UINT8*)0x20=0x11; *(volatile UINT8*)0xA0=0x11;
-    // ICW2
     *(volatile UINT8*)0x21=0x20; *(volatile UINT8*)0xA1=0x28;
-    // ICW3
     *(volatile UINT8*)0x21=0x04; *(volatile UINT8*)0xA1=0x02;
-    // ICW4
     *(volatile UINT8*)0x21=0x01; *(volatile UINT8*)0xA1=0x01;
-    // マスク解除（IRQ1のみ有効）
     *(volatile UINT8*)0x21=0xFD; *(volatile UINT8*)0xA1=0xFF;
 }
+
+// ================= シリアル =================
+#define COM1_PORT 0x3F8
+static inline void serial_write_char(char c){
+    while(!(*(volatile UINT8*)(COM1_PORT+5)&0x20)); 
+    *(volatile UINT8*)(COM1_PORT)=c;
+}
+static void serial_write(const char *s){ while(*s) serial_write_char(*s++); }
 
 // ================= Keyboard =================
 #define KB_BUFFER_SIZE 256
 volatile char kb_buffer[KB_BUFFER_SIZE]; volatile UINT32 kb_head=0,kb_tail=0;
-char scancode_to_ascii[128]={0,27,'1','2','3','4','5','6','7','8','9','0','-','=','\b','\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',0,'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\','z','x','c','v','b','n','m',',','.','/',0,'*',0,' '};
+char scancode_to_ascii[128]={0,27,'1','2','3','4','5','6','7','8','9','0','-','=','\b','\t',
+'q','w','e','r','t','y','u','i','o','p','[',']','\n',0,'a','s','d','f','g','h','j','k','l',
+';','\'','`',0,'\\','z','x','c','v','b','n','m',',','.','/',0,'*',0,' '};
 
 void irq1_handler(){
     UINT8 sc = *(volatile UINT8*)0x60;
-    if(sc<128 && scancode_to_ascii[sc]){
+    if(sc<128){
         char c = scancode_to_ascii[sc];
-        kb_buffer[kb_head]=c;
-        kb_head=(kb_head+1)%KB_BUFFER_SIZE;
+        if(c){
+            // シリアル出力
+            serial_write_char(c);
+
+            // バッファにも格納
+            kb_buffer[kb_head]=c;
+            kb_head=(kb_head+1)%KB_BUFFER_SIZE;
+        }
     }
-    // EOI
+    // PIC EOI
     *(volatile UINT8*)0x20=0x20;
     *(volatile UINT8*)0xA0=0x20;
     __asm__("iretq");
@@ -138,7 +149,7 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     // IDT + PIC
     for(int i=0;i<256;i++) set_idt_entry(i,dummy_isr);
-    set_idt_entry(1,irq1_handler); // IRQ1キーボード
+    set_idt_entry(1,irq1_handler);
     pic_init(); load_idt(); __asm__("sti");
 
     // 背景
@@ -150,10 +161,13 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     while(1){
         while(kb_tail!=kb_head){
             char c=kb_buffer[kb_tail]; kb_tail=(kb_tail+1)%KB_BUFFER_SIZE;
+            if(c=='\b'){ if(cx>100) cx-=8; continue; }
+            if(c=='\n'){ cx=100; cy+=16; if(cy>vr-16) cy=140; continue; }
             draw_char(vram,stride,cx,cy,0xFFFFFF,c); cx+=8;
             if(cx>hr-8){ cx=100; cy+=16; if(cy>vr-16) cy=140; }
         }
         __asm__("hlt");
     }
+
     return EFI_SUCCESS;
 }
