@@ -1,6 +1,5 @@
 #include "font.h"
 
-// ================= 基本型 =================
 typedef unsigned long long UINT64;
 typedef unsigned int       UINT32;
 typedef unsigned short     UINT16;
@@ -20,7 +19,7 @@ typedef struct {
     UINT8  Data4[8];
 } EFI_GUID;
 
-// ================= テーブル =================
+// ================= TABLE =================
 typedef struct {
     UINT64 Signature;
     UINT32 Revision;
@@ -32,21 +31,13 @@ typedef struct {
 // ================= Boot Services =================
 typedef struct EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
 
-typedef EFI_STATUS (EFIAPI *EFI_GET_MEMORY_MAP)(
-    UINT64 *, void *, UINT64 *, UINT64 *, UINT32 *);
-
-typedef EFI_STATUS (EFIAPI *EFI_ALLOCATE_POOL)(
-    UINT32, UINT64, void **);
-
-typedef EFI_STATUS (EFIAPI *EFI_EXIT_BOOT_SERVICES)(
-    EFI_HANDLE, UINT64);
-
-typedef EFI_STATUS (EFIAPI *EFI_LOCATE_PROTOCOL)(
-    EFI_GUID *, void *, void **);
+typedef EFI_STATUS (EFIAPI *EFI_GET_MEMORY_MAP)(UINT64 *, void *, UINT64 *, UINT64 *, UINT32 *);
+typedef EFI_STATUS (EFIAPI *EFI_ALLOCATE_POOL)(UINT32, UINT64, void **);
+typedef EFI_STATUS (EFIAPI *EFI_EXIT_BOOT_SERVICES)(EFI_HANDLE, UINT64);
+typedef EFI_STATUS (EFIAPI *EFI_LOCATE_PROTOCOL)(EFI_GUID *, void *, void **);
 
 struct EFI_BOOT_SERVICES {
     EFI_TABLE_HEADER Hdr;
-
     void *RaiseTPL;
     void *RestoreTPL;
     void *AllocatePages;
@@ -150,11 +141,8 @@ UINT32 region_count = 0;
 
 void init_pmm(void *map, UINT64 map_size, UINT64 desc_size) {
     UINT8 *ptr = (UINT8*)map;
-
     for (UINT64 i = 0; i < map_size; i += desc_size) {
-        EFI_MEMORY_DESCRIPTOR *desc =
-            (EFI_MEMORY_DESCRIPTOR*)(ptr + i);
-
+        EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR*)(ptr + i);
         if (desc->Type == 7 && region_count < MAX_REGIONS) {
             regions[region_count].base = desc->PhysicalStart;
             regions[region_count].size = desc->NumberOfPages * 4096;
@@ -163,28 +151,33 @@ void init_pmm(void *map, UINT64 map_size, UINT64 desc_size) {
     }
 }
 
-// ================= kmalloc =================
+// ================= SAFE HEAP =================
 UINT64 heap_current;
 UINT64 heap_end;
 
 void init_heap() {
     if (region_count == 0) return;
-
     heap_current = regions[0].base;
     heap_end     = regions[0].base + regions[0].size;
 }
 
+// 8バイトアライン + 範囲チェック
 void* kmalloc(UINT64 size) {
     size = (size + 7) & ~7;
-
-    if (heap_current + size > heap_end) return 0;
-
-    void* ptr = (void*)heap_current;
-    heap_current += size;
-    return ptr;
+    for (UINT32 i = 0; i < region_count; i++) {
+        UINT64 start = (heap_current + 7) & ~7;
+        if (start + size <= regions[i].base + regions[i].size) {
+            void* ptr = (void*)start;
+            heap_current = start + size;
+            return ptr;
+        } else {
+            heap_current = regions[i].base;
+        }
+    }
+    return 0; // メモリ不足
 }
 
-// ================= IDT（安全版） =================
+// ================= IDT =================
 struct IDTEntry {
     UINT16 offset_low;
     UINT16 selector;
@@ -202,14 +195,23 @@ struct IDTR {
 
 struct IDTEntry idt[256];
 
-// ダミーハンドラ（何もしない）
-void dummy_isr() {
-    __asm__ volatile ("iretq");
+// シリアルデバッグ出力（COM1）
+#define COM1_PORT 0x3F8
+static inline void serial_write_char(char c) {
+    while (!( *(volatile UINT8*)(COM1_PORT + 5) & 0x20 ));
+    *(volatile UINT8*)(COM1_PORT) = c;
 }
+static void serial_write(const char *s) {
+    while (*s) serial_write_char(*s++);
+}
+
+// 基本ハンドラ
+void isr_div_zero()  { serial_write("DIV0\n");  __asm__("iretq"); }
+void isr_page_fault(){ serial_write("PF\n");    __asm__("iretq"); }
+void dummy_isr()     { __asm__("iretq"); }
 
 void set_idt_entry(int vec, void* handler) {
     UINT64 addr = (UINT64)handler;
-
     idt[vec].offset_low  = addr & 0xFFFF;
     idt[vec].selector    = 0x08;
     idt[vec].ist         = 0;
@@ -223,22 +225,26 @@ void load_idt() {
     struct IDTR idtr;
     idtr.limit = sizeof(idt) - 1;
     idtr.base  = (UINT64)&idt;
-
     __asm__ volatile ("lidt %0" : : "m"(idtr));
 }
 
-// ================= メイン =================
-EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
+// ================= 画面描画 =================
+static inline void draw_pixel(UINT32 *vram, UINT32 stride, UINT32 x, UINT32 y, UINT32 color) {
+    vram[y * stride + x] = color;
+}
 
+static void draw_rect(UINT32 *vram, UINT32 stride, UINT32 x, UINT32 y, UINT32 w, UINT32 h, UINT32 color) {
+    for (UINT32 j=0;j<h;j++) for(UINT32 i=0;i<w;i++) draw_pixel(vram,stride,x+i,y+j,color);
+}
+
+// ================= MAIN =================
+EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     EFI_BOOT_SERVICES *BS = SystemTable->BootServices;
 
     // GOP
-    EFI_GUID gop_guid =
-        {0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
-
+    EFI_GUID gop_guid = {0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
-    BS->LocateProtocol(&gop_guid, 0, (void**)&gop);
-
+    BS->LocateProtocol(&gop_guid,0,(void**)&gop);
     UINT32 *vram = (UINT32*)gop->Mode->FrameBufferBase;
     UINT32 hr = gop->Mode->Info->HorizontalResolution;
     UINT32 vr = gop->Mode->Info->VerticalResolution;
@@ -248,48 +254,35 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     UINT64 map_size = 0, map_key, desc_size;
     UINT32 desc_ver;
     void *map_buf = 0;
-
-    BS->GetMemoryMap(&map_size, 0, &map_key, &desc_size, &desc_ver);
+    BS->GetMemoryMap(&map_size,0,&map_key,&desc_size,&desc_ver);
     map_size += 1024;
-    BS->AllocatePool(EfiLoaderData, map_size, &map_buf);
+    BS->AllocatePool(EfiLoaderData,map_size,&map_buf);
 
     // ExitBootServices
-    while (1) {
-        if (BS->GetMemoryMap(&map_size, map_buf, &map_key, &desc_size, &desc_ver) != EFI_SUCCESS)
-            break;
-
-        if (BS->ExitBootServices(ImageHandle, map_key) == EFI_SUCCESS)
-            break;
+    while(1){
+        if(BS->GetMemoryMap(&map_size,map_buf,&map_key,&desc_size,&desc_ver)!=EFI_SUCCESS) break;
+        if(BS->ExitBootServices(ImageHandle,map_key)==EFI_SUCCESS) break;
     }
 
     // PMM + heap
-    init_pmm(map_buf, map_size, desc_size);
+    init_pmm(map_buf,map_size,desc_size);
     init_heap();
-
-    // kmallocテスト（安全）
     void *p = kmalloc(64);
 
-    // IDT（全部ダミー）
-    for (int i = 0; i < 256; i++) {
-        set_idt_entry(i, dummy_isr);
-    }
-
+    // IDT設定
+    for(int i=0;i<256;i++) set_idt_entry(i,dummy_isr);
+    set_idt_entry(0,isr_div_zero);
+    set_idt_entry(14,isr_page_fault);
     load_idt();
     __asm__("sti");
 
-    // 画面描画
-    for (UINT32 y = 0; y < vr; y++) {
-        for (UINT32 x = 0; x < hr; x++) {
-            vram[y * stride + x] = 0x00202020;
-        }
-    }
+    // 背景描画
+    draw_rect(vram,stride,0,0,hr,vr,0x00202020);
 
-    draw_string(vram, stride, 100, 100, 0xFFFFFF, "STABLE CORE OK");
-    draw_string(vram, stride, 100, 120, 0x00FF00, "PMM / KMALLOC / IDT READY");
+    // 文字表示
+    draw_string(vram,stride,100,100,0xFFFFFF,"STABLE CORE OK");
+    draw_string(vram,stride,100,120,0x00FF00,"PMM / SAFE KMALLOC / IDT READY");
 
-    while (1) {
-        __asm__("hlt");
-    }
-
+    while(1) __asm__("hlt");
     return EFI_SUCCESS;
 }
