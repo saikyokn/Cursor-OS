@@ -1,10 +1,19 @@
-#pragma once
-#include <stdint.h>
+#ifndef CONSOLE_H
+#define CONSOLE_H
 
-void console_init(uint32_t* vram, uint32_t stride);
+// ===== 初期化 =====
+void console_init(unsigned int* vram, unsigned int stride);
+
+// ===== 描画 =====
 void console_putc(char c);
 void console_write(const char* s);
-void console_render();
+void console_render(void);
 
-void console_set_color(uint32_t color);
-void console_clear(void);   // ← clear用
+// ===== 制御 =====
+void console_clear(void);
+void console_set_color(unsigned int color);
+
+// ===== UI（追加機能）=====
+void console_ui_render(void);
+
+#endif
