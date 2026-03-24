@@ -41,7 +41,6 @@ typedef EFI_STATUS (EFIAPI *EFI_LOCATE_PROTOCOL)(EFI_GUID *, void *, void **);
 
 struct EFI_BOOT_SERVICES {
     EFI_TABLE_HEADER Hdr;
-
     void *RaiseTPL;
     void *RestoreTPL;
     void *AllocatePages;
@@ -169,19 +168,19 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     UINT32 *vram  = (UINT32*)gop->Mode->FrameBufferBase;
     UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
 
-    // ===== メモリマップ =====
-    UINT64 map_size = 0, map_key, desc_size;
+    // ===== ExitBootServices =====
+    UINT64 map_size=0, map_key, desc_size;
     UINT32 desc_ver;
-    void *map_buf = 0;
+    void *map_buf=0;
 
-    BS->GetMemoryMap(&map_size, 0, &map_key, &desc_size, &desc_ver);
+    BS->GetMemoryMap(&map_size,0,&map_key,&desc_size,&desc_ver);
     map_size += 1024;
-    BS->AllocatePool(EfiLoaderData, map_size, &map_buf);
+    BS->AllocatePool(EfiLoaderData,map_size,&map_buf);
 
     while(1){
-        if(BS->GetMemoryMap(&map_size, map_buf, &map_key, &desc_size, &desc_ver) != EFI_SUCCESS)
+        if(BS->GetMemoryMap(&map_size,map_buf,&map_key,&desc_size,&desc_ver)!=EFI_SUCCESS)
             continue;
-        if(BS->ExitBootServices(ImageHandle, map_key) == EFI_SUCCESS)
+        if(BS->ExitBootServices(ImageHandle,map_key)==EFI_SUCCESS)
             break;
     }
 
@@ -191,6 +190,8 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     console_write("PS/2 KEYBOARD ACTIVE\n> ");
     console_render();
 
+    int shift = 0;
+
     // ===== 入力ループ =====
     while(1){
 
@@ -198,16 +199,40 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
             UINT8 sc = keyboard_read();
 
-            // リリース無視
+            // ===== Shift管理 =====
+            if(sc == 0x2A || sc == 0x36){ shift = 1; continue; }
+            if(sc == 0xAA || sc == 0xB6){ shift = 0; continue; }
+
             if(sc & 0x80) continue;
 
             char c = keytable[sc];
+            if(!c) continue;
 
-            if(c){
-                console_putc(c);
-                console_render();
+            // ===== Shift変換 =====
+            if(shift && c >= 'a' && c <= 'z'){
+                c -= 32;
             }
+
+            // ===== Enter =====
+            if(c == '\n'){
+                console_putc('\n');
+                console_write("> ");
+                console_render();
+                continue;
+            }
+
+            // ===== Backspace =====
+            if(c == 8){
+                console_putc('\b');
+                console_render();
+                continue;
+            }
+
+            // ===== 通常 =====
+            console_putc(c);
+            console_render();
         }
+
     }
 
     return EFI_SUCCESS;
