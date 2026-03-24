@@ -1,41 +1,20 @@
 #include "font.h"
 #include "console.h"
 
-// ================= 基本型 =================
+// ===== 基本型 =====
 typedef unsigned long long UINT64;
 typedef unsigned int       UINT32;
 typedef unsigned short     UINT16;
 typedef unsigned char      UINT8;
-typedef UINT64             EFI_STATUS;
-typedef void*              EFI_HANDLE;
+
+typedef UINT64 EFI_STATUS;
+typedef void*  EFI_HANDLE;
 
 #define EFIAPI __attribute__((ms_abi))
 #define EFI_SUCCESS 0
 #define EfiLoaderData 4
 
-extern void irq1_wrapper();
-
-// ================= キーボードバッファ =================
-#define KB_BUF 256
-volatile char kb_buf[KB_BUF];
-volatile UINT32 kb_head = 0;
-volatile UINT32 kb_tail = 0;
-
-// asmから呼ばれる
-__attribute__((sysv_abi))
-void kb_push(char c){
-    kb_buf[kb_head] = c;
-    kb_head = (kb_head + 1) % KB_BUF;
-}
-
-int kb_pop(){
-    if(kb_head == kb_tail) return -1;
-    char c = kb_buf[kb_tail];
-    kb_tail = (kb_tail + 1) % KB_BUF;
-    return c;
-}
-
-// ================= GUID =================
+// ===== GUID =====
 typedef struct {
     UINT32 Data1;
     UINT16 Data2;
@@ -43,7 +22,7 @@ typedef struct {
     UINT8  Data4[8];
 } EFI_GUID;
 
-// ================= テーブル =================
+// ===== テーブル =====
 typedef struct {
     UINT64 Signature;
     UINT32 Revision;
@@ -52,7 +31,7 @@ typedef struct {
     UINT32 Reserved;
 } EFI_TABLE_HEADER;
 
-// ================= Boot Services =================
+// ===== BootServices =====
 typedef struct EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
 
 typedef EFI_STATUS (EFIAPI *EFI_GET_MEMORY_MAP)(UINT64 *, void *, UINT64 *, UINT64 *, UINT32 *);
@@ -109,7 +88,7 @@ struct EFI_BOOT_SERVICES {
     void *CreateEventEx;
 };
 
-// ================= System Table =================
+// ===== SystemTable =====
 typedef struct {
     EFI_TABLE_HEADER Hdr;
     void *FirmwareVendor;
@@ -124,7 +103,7 @@ typedef struct {
     EFI_BOOT_SERVICES *BootServices;
 } EFI_SYSTEM_TABLE;
 
-// ================= GOP =================
+// ===== GOP =====
 typedef struct {
     UINT32 Version;
     UINT32 HorizontalResolution;
@@ -150,127 +129,85 @@ typedef struct {
     EFI_GOP_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
-// ================= IDT =================
-struct IDTEntry {
-    UINT16 offset_low, selector;
-    UINT8 ist, type_attr;
-    UINT16 offset_mid;
-    UINT32 offset_high, zero;
-} __attribute__((packed));
-
-struct IDTR {
-    UINT16 limit;
-    UINT64 base;
-} __attribute__((packed));
-
-struct IDTEntry idt[256];
-
-__attribute__((naked))
-void dummy_isr(){
-    __asm__("iretq");
+// ===== I/O =====
+static inline UINT8 in8(UINT16 port){
+    UINT8 ret;
+    __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
 }
 
-void set_idt_entry(int vec, void* handler){
-    UINT64 addr = (UINT64)handler;
-
-    idt[vec].offset_low  = addr & 0xFFFF;
-    idt[vec].selector    = 0x08;
-    idt[vec].ist         = 0;
-    idt[vec].type_attr   = 0x8E;
-    idt[vec].offset_mid  = (addr >> 16) & 0xFFFF;
-    idt[vec].offset_high = (addr >> 32);
-    idt[vec].zero        = 0;
+// ===== キーボード =====
+int keyboard_ready(){
+    return in8(0x64) & 1;
 }
 
-void load_idt(){
-    struct IDTR idtr;
-    idtr.limit = sizeof(idt) - 1;
-    idtr.base  = (UINT64)&idt;
-
-    __asm__ volatile ("lidt %0" : : "m"(idtr));
+UINT8 keyboard_read(){
+    return in8(0x60);
 }
 
-// ================= PIC =================
-void pic_init(){
-    *(volatile UINT8*)0x20 = 0x11;
-    *(volatile UINT8*)0xA0 = 0x11;
-    *(volatile UINT8*)0x21 = 0x20;
-    *(volatile UINT8*)0xA1 = 0x28;
-    *(volatile UINT8*)0x21 = 0x04;
-    *(volatile UINT8*)0xA1 = 0x02;
-    *(volatile UINT8*)0x21 = 0x01;
-    *(volatile UINT8*)0xA1 = 0x01;
+// ===== スキャンコード =====
+char keytable[128] = {
+0,27,'1','2','3','4','5','6','7','8','9','0','-','=',8,
+'\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',
+0,'a','s','d','f','g','h','j','k','l',';',39,'`',
+0,'\\','z','x','c','v','b','n','m',',','.','/',0,
+'*',0,' '
+};
 
-    *(volatile UINT8*)0x21 = 0xFD;
-    *(volatile UINT8*)0xA1 = 0xFF;
-}
-
-// ================= MAIN =================
+// ===== MAIN =====
 EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable){
 
     EFI_BOOT_SERVICES *BS = SystemTable->BootServices;
 
-    // ================= GOP =================
+    // ===== GOP =====
     EFI_GUID gop_guid =
         {0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
 
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
     BS->LocateProtocol(&gop_guid, 0, (void**)&gop);
 
-    UINT32 *vram   = (UINT32*)gop->Mode->FrameBufferBase;
-    UINT32 stride  = gop->Mode->Info->PixelsPerScanLine;
+    UINT32 *vram  = (UINT32*)gop->Mode->FrameBufferBase;
+    UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
 
-    // ================= ExitBootServices =================
-    UINT64 map_size=0, map_key, desc_size;
+    // ===== メモリマップ =====
+    UINT64 map_size = 0, map_key, desc_size;
     UINT32 desc_ver;
-    void *map_buf=0;
+    void *map_buf = 0;
 
-    BS->GetMemoryMap(&map_size,0,&map_key,&desc_size,&desc_ver);
+    BS->GetMemoryMap(&map_size, 0, &map_key, &desc_size, &desc_ver);
     map_size += 1024;
-    BS->AllocatePool(EfiLoaderData,map_size,&map_buf);
+    BS->AllocatePool(EfiLoaderData, map_size, &map_buf);
 
     while(1){
-        if(BS->GetMemoryMap(&map_size,map_buf,&map_key,&desc_size,&desc_ver)!=EFI_SUCCESS)
-            break;
-
-        if(BS->ExitBootServices(ImageHandle,map_key)==EFI_SUCCESS)
+        if(BS->GetMemoryMap(&map_size, map_buf, &map_key, &desc_size, &desc_ver) != EFI_SUCCESS)
+            continue;
+        if(BS->ExitBootServices(ImageHandle, map_key) == EFI_SUCCESS)
             break;
     }
 
-    // ================= IDT + IRQ =================
-    for(int i=0;i<256;i++)
-        set_idt_entry(i,dummy_isr);
-
-    set_idt_entry(0x21, irq1_wrapper);
-
-    pic_init();
-    load_idt();
-    __asm__("sti");
-
-    // ================= コンソール =================
+    // ===== カーネル =====
     console_init(vram, stride);
-
-    console_write("SAIKYOKN OS CONSOLE READY\n");
-    console_write("> ");
+    console_write("SAIKYOKN OS KERNEL MODE\n");
+    console_write("PS/2 KEYBOARD ACTIVE\n> ");
     console_render();
 
-    // ================= メインループ =================
+    // ===== 入力ループ =====
     while(1){
 
-        int c = kb_pop();
+        if(keyboard_ready()){
 
-        if(c != -1){
+            UINT8 sc = keyboard_read();
 
-            console_putc((char)c);
+            // リリース無視
+            if(sc & 0x80) continue;
 
-            if(c == '\n'){
-                console_write("> ");
+            char c = keytable[sc];
+
+            if(c){
+                console_putc(c);
+                console_render();
             }
-
-            console_render();
         }
-
-        __asm__("hlt");
     }
 
     return EFI_SUCCESS;
