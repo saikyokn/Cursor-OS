@@ -153,6 +153,45 @@ char keytable[128] = {
 '*',0,' '
 };
 
+// ===== シェル =====
+#define INPUT_MAX 128
+char input[INPUT_MAX];
+int input_len = 0;
+
+int strcmp(const char* a, const char* b){
+    while(*a && *b){
+        if(*a != *b) return 0;
+        a++; b++;
+    }
+    return (*a == 0 && *b == 0);
+}
+
+int strncmp(const char* a, const char* b, int n){
+    for(int i=0;i<n;i++){
+        if(a[i] != b[i]) return 0;
+        if(a[i] == 0) return 1;
+    }
+    return 1;
+}
+
+void run_command(){
+    
+    if(strcmp(input, "help")){
+        console_write("\nCommands:\nhelp clear echo\n");
+    }
+    else if(strcmp(input, "clear")){
+        console_clear();
+    }
+    else if(strncmp(input, "echo ", 5)){
+        console_write("\n");
+        console_write(input + 5);
+        console_write("\n");
+    }
+    else{
+        console_write("\nUnknown command\n");
+    }
+}
+
 // ===== MAIN =====
 EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable){
 
@@ -186,20 +225,18 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     // ===== カーネル =====
     console_init(vram, stride);
-    console_write("SAIKYOKN OS KERNEL MODE\n");
-    console_write("PS/2 KEYBOARD ACTIVE\n> ");
+    console_write("SAIKYOKN OS SHELL\n> ");
     console_render();
 
     int shift = 0;
 
-    // ===== 入力ループ =====
+    // ===== メインループ =====
     while(1){
 
         if(keyboard_ready()){
 
             UINT8 sc = keyboard_read();
 
-            // ===== Shift管理 =====
             if(sc == 0x2A || sc == 0x36){ shift = 1; continue; }
             if(sc == 0xAA || sc == 0xB6){ shift = 0; continue; }
 
@@ -208,14 +245,15 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             char c = keytable[sc];
             if(!c) continue;
 
-            // ===== Shift変換 =====
             if(shift && c >= 'a' && c <= 'z'){
                 c -= 32;
             }
 
             // ===== Enter =====
             if(c == '\n'){
-                console_putc('\n');
+                input[input_len] = 0;
+                run_command();
+                input_len = 0;
                 console_write("> ");
                 console_render();
                 continue;
@@ -223,16 +261,21 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
             // ===== Backspace =====
             if(c == 8){
-                console_putc('\b');
-                console_render();
+                if(input_len > 0){
+                    input_len--;
+                    console_putc('\b');
+                    console_render();
+                }
                 continue;
             }
 
-            // ===== 通常 =====
-            console_putc(c);
-            console_render();
+            // ===== 通常入力 =====
+            if(input_len < INPUT_MAX-1){
+                input[input_len++] = c;
+                console_putc(c);
+                console_render();
+            }
         }
-
     }
 
     return EFI_SUCCESS;
