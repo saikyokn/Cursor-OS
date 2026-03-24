@@ -1,9 +1,10 @@
 #pragma once
+#include <stdint.h>
 
-typedef unsigned int UINT32;
-
-void console_init(UINT32 *vram, UINT32 stride);
-void console_clear();
+void console_init(uint32_t* vram, uint32_t stride);
 void console_putc(char c);
-void console_write(const char *s);
+void console_write(const char* s);
 void console_render();
+
+void console_set_color(uint32_t color);
+void console_clear(void);   // ← clear用

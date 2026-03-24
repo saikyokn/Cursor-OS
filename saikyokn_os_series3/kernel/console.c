@@ -1,78 +1,78 @@
 #include "console.h"
-#include "font.h"
 
-#define COLS 80
-#define ROWS 25
+static unsigned int* vram;
+static unsigned int stride;
 
-static char buf[ROWS][COLS];
+static int cursor_x = 0;
+static int cursor_y = 0;
 
-static UINT32 cur_x = 0;
-static UINT32 cur_y = 0;
+static unsigned int current_color = 0x00FFFFFF;
 
-static UINT32 *fb;
-static UINT32 fb_stride;
+// 🔥 これが重要（font.cと一致させる）
+extern void draw_char(unsigned int *vram, unsigned int stride, int x, int y, unsigned int color, unsigned char c);
 
-void console_init(UINT32 *vram, UINT32 stride){
-    fb = vram;
-    fb_stride = stride;
-    console_clear();
+// サイズ
+#define CHAR_W 8
+#define CHAR_H 16
+#define SCREEN_W 1024
+#define SCREEN_H 768
+
+void console_set_color(unsigned int color){
+    current_color = color;
 }
 
 void console_clear(){
-    for(int y=0;y<ROWS;y++)
-        for(int x=0;x<COLS;x++)
-            buf[y][x] = ' ';
-
-    cur_x = 0;
-    cur_y = 0;
+    for(int y = 0; y < SCREEN_H; y++){
+        for(int x = 0; x < SCREEN_W; x++){
+            vram[y * stride + x] = 0x00000000;
+        }
+    }
+    cursor_x = 0;
+    cursor_y = 0;
 }
 
-static void scroll(){
-    for(int y=1;y<ROWS;y++)
-        for(int x=0;x<COLS;x++)
-            buf[y-1][x] = buf[y][x];
+void console_init(unsigned int* fb, unsigned int s){
+    vram = fb;
+    stride = s;
+    cursor_x = 0;
+    cursor_y = 0;
 
-    for(int x=0;x<COLS;x++)
-        buf[ROWS-1][x] = ' ';
-
-    cur_y = ROWS-1;
+    console_clear();
 }
 
 void console_putc(char c){
 
-    if(c=='\n'){
-        cur_x=0;
-        cur_y++;
-    }
-    else if(c=='\b'){
-        if(cur_x>0){
-            cur_x--;
-            buf[cur_y][cur_x]=' ';
-        }
-    }
-    else{
-        buf[cur_y][cur_x]=c;
-        cur_x++;
-
-        if(cur_x>=COLS){
-            cur_x=0;
-            cur_y++;
-        }
+    if(c == '\n'){
+        cursor_x = 0;
+        cursor_y++;
+        return;
     }
 
-    if(cur_y>=ROWS){
-        scroll();
+    if(c == '\b'){
+        if(cursor_x > 0) cursor_x--;
+        return;
+    }
+
+    // 🔥 ここが修正ポイント
+    draw_char(vram, stride,
+              cursor_x * CHAR_W,
+              cursor_y * CHAR_H,
+              current_color,
+              (unsigned char)c);
+
+    cursor_x++;
+
+    if(cursor_x >= (SCREEN_W / CHAR_W)){
+        cursor_x = 0;
+        cursor_y++;
     }
 }
 
-void console_write(const char *s){
-    while(*s) console_putc(*s++);
+void console_write(const char* s){
+    while(*s){
+        console_putc(*s++);
+    }
 }
 
 void console_render(){
-    for(int y=0;y<ROWS;y++){
-        for(int x=0;x<COLS;x++){
-            draw_char(fb, fb_stride, x*8, y*16, 0xFFFFFF, buf[y][x]);
-        }
-    }
 }

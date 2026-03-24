@@ -128,7 +128,7 @@ typedef struct {
     EFI_GOP_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
-// ===== 外部（shell.c）=====
+// ===== shell =====
 extern void shell_run(char* input);
 
 // ===== I/O =====
@@ -139,13 +139,8 @@ static inline UINT8 in8(UINT16 port){
 }
 
 // ===== キーボード =====
-int keyboard_ready(){
-    return in8(0x64) & 1;
-}
-
-UINT8 keyboard_read(){
-    return in8(0x60);
-}
+int keyboard_ready(){ return in8(0x64) & 1; }
+UINT8 keyboard_read(){ return in8(0x60); }
 
 // ===== スキャンコード =====
 char keytable[128] = {
@@ -156,10 +151,19 @@ char keytable[128] = {
 '*',0,' '
 };
 
-// ===== 入力バッファ =====
+// ===== 入力 =====
 #define INPUT_MAX 128
 char input[INPUT_MAX];
 int input_len = 0;
+
+// ===== 画面クリア =====
+void clear_screen(UINT32* vram, UINT32 stride, UINT32 w, UINT32 h){
+    for(UINT32 y = 0; y < h; y++){
+        for(UINT32 x = 0; x < w; x++){
+            vram[y * stride + x] = 0x00000000;
+        }
+    }
+}
 
 // ===== MAIN =====
 EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable){
@@ -175,6 +179,8 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     UINT32 *vram  = (UINT32*)gop->Mode->FrameBufferBase;
     UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
+    UINT32 width  = gop->Mode->Info->HorizontalResolution;
+    UINT32 height = gop->Mode->Info->VerticalResolution;
 
     // ===== ExitBootServices =====
     UINT64 map_size=0, map_key, desc_size;
@@ -194,6 +200,10 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     // ===== カーネル開始 =====
     console_init(vram, stride);
+
+    // 🔥 黒背景
+    clear_screen(vram, stride, width, height);
+
     console_write("SAIKYOKN OS\n> ");
     console_render();
 
@@ -206,7 +216,6 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
             UINT8 sc = keyboard_read();
 
-            // Shift
             if(sc == 0x2A || sc == 0x36){ shift = 1; continue; }
             if(sc == 0xAA || sc == 0xB6){ shift = 0; continue; }
 
@@ -222,7 +231,7 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             // Enter
             if(c == '\n'){
                 input[input_len] = 0;
-                shell_run(input);   // ← shell.cへ
+                shell_run(input);
                 input_len = 0;
                 console_write("> ");
                 console_render();
