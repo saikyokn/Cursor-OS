@@ -128,6 +128,9 @@ typedef struct {
     EFI_GOP_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
+// ===== 外部（shell.c）=====
+extern void shell_run(char* input);
+
 // ===== I/O =====
 static inline UINT8 in8(UINT16 port){
     UINT8 ret;
@@ -153,44 +156,10 @@ char keytable[128] = {
 '*',0,' '
 };
 
-// ===== シェル =====
+// ===== 入力バッファ =====
 #define INPUT_MAX 128
 char input[INPUT_MAX];
 int input_len = 0;
-
-int strcmp(const char* a, const char* b){
-    while(*a && *b){
-        if(*a != *b) return 0;
-        a++; b++;
-    }
-    return (*a == 0 && *b == 0);
-}
-
-int strncmp(const char* a, const char* b, int n){
-    for(int i=0;i<n;i++){
-        if(a[i] != b[i]) return 0;
-        if(a[i] == 0) return 1;
-    }
-    return 1;
-}
-
-void run_command(){
-    
-    if(strcmp(input, "help")){
-        console_write("\nCommands:\nhelp clear echo\n");
-    }
-    else if(strcmp(input, "clear")){
-        console_clear();
-    }
-    else if(strncmp(input, "echo ", 5)){
-        console_write("\n");
-        console_write(input + 5);
-        console_write("\n");
-    }
-    else{
-        console_write("\nUnknown command\n");
-    }
-}
 
 // ===== MAIN =====
 EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable){
@@ -223,9 +192,9 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             break;
     }
 
-    // ===== カーネル =====
+    // ===== カーネル開始 =====
     console_init(vram, stride);
-    console_write("SAIKYOKN OS SHELL\n> ");
+    console_write("SAIKYOKN OS\n> ");
     console_render();
 
     int shift = 0;
@@ -237,6 +206,7 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
             UINT8 sc = keyboard_read();
 
+            // Shift
             if(sc == 0x2A || sc == 0x36){ shift = 1; continue; }
             if(sc == 0xAA || sc == 0xB6){ shift = 0; continue; }
 
@@ -249,17 +219,17 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
                 c -= 32;
             }
 
-            // ===== Enter =====
+            // Enter
             if(c == '\n'){
                 input[input_len] = 0;
-                run_command();
+                shell_run(input);   // ← shell.cへ
                 input_len = 0;
                 console_write("> ");
                 console_render();
                 continue;
             }
 
-            // ===== Backspace =====
+            // Backspace
             if(c == 8){
                 if(input_len > 0){
                     input_len--;
@@ -269,7 +239,7 @@ EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
                 continue;
             }
 
-            // ===== 通常入力 =====
+            // 通常入力
             if(input_len < INPUT_MAX-1){
                 input[input_len++] = c;
                 console_putc(c);

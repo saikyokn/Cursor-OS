@@ -8,8 +8,12 @@ OVMF_VARS = D:/OVMF_VARS.fd
 CC  = x86_64-w64-mingw32-gcc.exe
 TARGET = saikyokn.efi
 
-# ===== ソース =====
-SRC = ../kernel/main.c ../kernel/console.c ../kernel/font.c ../kernel/hankaku.c
+# ===== ソース（🔥ここ重要）=====
+SRC = ../kernel/main.c \
+      ../kernel/shell.c \
+      ../kernel/console.c \
+      ../kernel/font.c \
+      ../kernel/hankaku.c
 
 # ===== オプション =====
 CFLAGS = -ffreestanding -mno-red-zone -fno-stack-protector -fshort-wchar -m64 \
@@ -24,12 +28,12 @@ LDFLAGS = -shared -nostdlib -e EfiMain \
 all: clean $(TARGET)
 
 $(TARGET): $(SRC)
-	@echo [Building Saikyokn OS: KERNEL MODE]
+	@echo [Building Saikyokn OS: SHELL MODE]
 	cmd /c "set PATH=$(W64_PATH);%PATH% && $(CC) $(CFLAGS) $(SRC) -o $(TARGET) $(LDFLAGS)"
 
 # ===== 実行 =====
 run: all
-	@if not exist fs\EFI\BOOT cmd /c mkdir fs\EFI\BOOT
+	@if not exist fs\EFI\BOOT mkdir fs\EFI\BOOT
 	@copy /y $(TARGET) fs\EFI\BOOT\BOOTX64.EFI
 	$(QEMU) -drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 	        -drive if=pflash,format=raw,file=$(OVMF_VARS) \
