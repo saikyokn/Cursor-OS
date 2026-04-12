@@ -6,15 +6,16 @@ OVMF_VARS  = D:/OVMF_VARS.fd
 CC      = gcc.exe
 TARGET  = saikyokn.efi
 
+# ★ pic.c を追加
 C_SRC   = ../kernel/boot.c ../kernel/main.c ../kernel/console.c \
           ../kernel/font.c ../kernel/hankaku.c ../kernel/gdt.c \
           ../kernel/error.c ../kernel/idt.c ../kernel/interrupt.c \
-          ../kernel/isr.s   # ← 小文字 .s として直接C_SRCに追加
+          ../kernel/pic.c ../kernel/isr.s
 
 ASM_SRC = ../kernel/entry.s
 
 C_OBJ   = $(notdir $(C_SRC:.c=.o))
-C_OBJ   := $(C_OBJ:.s=.o)   # .s も .o に変換
+C_OBJ   := $(C_OBJ:.s=.o)
 ASM_OBJ = $(notdir $(ASM_SRC:.s=.o))
 OBJ     = $(C_OBJ) $(ASM_OBJ)
 
@@ -35,7 +36,6 @@ all: $(TARGET)
 	@echo [CC] $<
 	@$(ENV) $(CC) $(CFLAGS) -c $< -o $@
 
-# .s ファイル用のルール
 %.o: ../kernel/%.s
 	@echo [AS] $<
 	@$(ENV) $(CC) $(CFLAGS) -c $< -o $@

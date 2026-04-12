@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+// PICポート定義
 #define PIC1_CMD  0x20
 #define PIC1_DATA 0x21
 #define PIC2_CMD  0xA0
@@ -13,6 +14,7 @@ void pic_enable_irq(uint8_t irq);
 void pic_disable_irq(uint8_t irq);
 void pic_send_eoi(uint8_t irq);
 
+// I/Oポート操作用
 void outb(uint16_t port, uint8_t val);
 uint8_t inb(uint16_t port);
 

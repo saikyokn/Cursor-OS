@@ -6,8 +6,11 @@ unsigned int* vram_global;
 unsigned int stride_global;
 unsigned int w_global, h_global;
 
-// ★ interrupt.c で定義されている変数を extern 宣言
+// interrupt.c で定義されている変数
 extern volatile unsigned int sw_int_count;
+
+// PICマスク読み取り関数（interrupt.cで定義）
+extern unsigned char pic_get_mask(int pic_num);
 
 static inline unsigned char inb(unsigned short port) {
     unsigned char ret;
@@ -70,7 +73,7 @@ void keyboard_process_key(uint8_t scancode) {
         if (input_len > 0) {
             if (strcmp(input_buf, "clear") == 0) {
                 console_clear_screen();
-                console_write("SAIKYOKN OS - Step1 (IDT only)\n");
+                console_write("SAIKYOKN OS - Step2 (IDT + PIC)\n");
             }
             else if (strcmp(input_buf, "test") == 0) {
                 console_write("Executing INT 0x20...\n");
@@ -84,8 +87,16 @@ void keyboard_process_key(uint8_t scancode) {
                 console_write(buf);
                 console_write("\n");
             }
+            else if (strcmp(input_buf, "pic") == 0) {
+                char buf[16];
+                console_write("PIC1 mask: ");
+                itoa10(pic_get_mask(1), buf); console_write(buf);
+                console_write(" PIC2 mask: ");
+                itoa10(pic_get_mask(2), buf); console_write(buf);
+                console_write("\n");
+            }
             else if (strcmp(input_buf, "help") == 0) {
-                console_write("Commands: clear, test, sw, help\n");
+                console_write("Commands: clear, test, sw, pic, help\n");
             }
             else {
                 console_write("Unknown: ");
@@ -120,12 +131,12 @@ void kernel_main(unsigned int* vram, unsigned int stride,
     console_init(vram, stride, width, height);
     console_set_color(0x00FFFFFF);
     console_clear_screen();
-    console_write("SAIKYOKN OS - Step1 (IDT only)\n");
+    console_write("SAIKYOKN OS - Step2 (IDT + PIC)\n");
     
-    // IDT初期化
+    // IDT + PIC 初期化
     interrupt_init();
-    console_write("IDT initialized\n");
-    console_write("Try 'test' command\n> ");
+    console_write("IDT + PIC initialized\n");
+    console_write("Try 'pic' command\n> ");
     console_render();
 
     while (1) {
