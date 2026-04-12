@@ -1,69 +1,46 @@
-#include "error.h"
+#include "interrupt.h"
+#include "idt.h"
+#include "console.h"
 
-typedef unsigned long long UINT64;
+volatile unsigned int sw_int_count = 0;
 
-extern volatile UINT64 ticks;
 extern unsigned int* vram_global;
-extern unsigned int stride_global, w_global, h_global;
+extern unsigned int stride_global;
 
-// ================= IRQ0 =================
-__attribute__((naked))
-void irq0_handler() {
-    __asm__ volatile(
-        "push %rax\n"
-        "push %rcx\n"
-        "push %rdx\n"
+struct regs {
+    uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
+    uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
+    uint64_t int_no, err_code;
+    uint64_t rip, cs, rflags, rsp, ss;
+};
 
-        "incq ticks(%rip)\n"
-
-        "mov $0x20, %al\n"
-        "out %al, $0x20\n"
-
-        "pop %rdx\n"
-        "pop %rcx\n"
-        "pop %rax\n"
-        "iretq\n"
-    );
+void isr_handler(struct regs *r) {
+    // ★ 割り込み番号を画面に直接表示（デバッグ用）
+    if (vram_global) {
+        // 割り込み番号を16進数で表示するための簡易テーブル
+        char hex[] = "0123456789ABCDEF";
+        unsigned int num = r->int_no;
+        
+        // 画面左上に番号を表示（赤い四角の下）
+        // 1桁目（16の位）
+        unsigned char high = (num >> 4) & 0x0F;
+        // 2桁目（1の位）
+        unsigned char low = num & 0x0F;
+        
+        // 簡易的に数字を描画（ドット絵）
+        // ここでは省略して、赤い四角の色を番号で変える
+        unsigned int color = 0x00FF0000 + (num * 0x100);
+        for (int y = 0; y < 16; y++) {
+            for (int x = 0; x < 8; x++) {
+                vram_global[y * stride_global + x] = color;
+            }
+        }
+    }
+    
+    // ソフトウェア割り込みカウンタを増やす（条件を緩く）
+    sw_int_count++;  // ★ すべての割り込みでカウントアップ
 }
 
-// ================= #DE =================
-__attribute__((naked))
-void isr_de(){
-    __asm__ volatile(
-        "cli\n"
-        "call de_handler\n"
-        "hlt\n"
-    );
-}
-
-void de_handler(){
-    panic(vram_global,stride_global,w_global,h_global,"DIVIDE ERROR");
-}
-
-// ================= #GP =================
-__attribute__((naked))
-void isr_gp(){
-    __asm__ volatile(
-        "cli\n"
-        "call gp_handler\n"
-        "hlt\n"
-    );
-}
-
-void gp_handler(){
-    panic(vram_global,stride_global,w_global,h_global,"GENERAL PROTECTION");
-}
-
-// ================= #PF =================
-__attribute__((naked))
-void isr_pf(){
-    __asm__ volatile(
-        "cli\n"
-        "call pf_handler\n"
-        "hlt\n"
-    );
-}
-
-void pf_handler(){
-    panic(vram_global,stride_global,w_global,h_global,"PAGE FAULT");
+void interrupt_init(void) {
+    idt_init();
 }

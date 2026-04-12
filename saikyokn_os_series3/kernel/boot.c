@@ -1,6 +1,5 @@
-#include "console.h"
+#include "gdt.h"
 
-// ===== 型 =====
 typedef unsigned long long UINT64;
 typedef unsigned int       UINT32;
 typedef unsigned short     UINT16;
@@ -13,7 +12,6 @@ typedef void*  EFI_HANDLE;
 #define EFI_SUCCESS 0
 #define EfiLoaderData 4
 
-// ===== GUID =====
 typedef struct {
     UINT32 Data1;
     UINT16 Data2;
@@ -21,7 +19,6 @@ typedef struct {
     UINT8  Data4[8];
 } EFI_GUID;
 
-// ===== テーブル =====
 typedef struct {
     UINT64 Signature;
     UINT32 Revision;
@@ -30,7 +27,6 @@ typedef struct {
     UINT32 Reserved;
 } EFI_TABLE_HEADER;
 
-// ===== BootServices =====
 typedef struct EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
 
 typedef EFI_STATUS (EFIAPI *EFI_GET_MEMORY_MAP)(UINT64 *, void *, UINT64 *, UINT64 *, UINT32 *);
@@ -40,7 +36,6 @@ typedef EFI_STATUS (EFIAPI *EFI_LOCATE_PROTOCOL)(EFI_GUID *, void *, void **);
 
 struct EFI_BOOT_SERVICES {
     EFI_TABLE_HEADER Hdr;
-
     void *RaiseTPL;
     void *RestoreTPL;
     void *AllocatePages;
@@ -81,7 +76,6 @@ struct EFI_BOOT_SERVICES {
     EFI_LOCATE_PROTOCOL LocateProtocol;
 };
 
-// ===== SystemTable =====
 typedef struct {
     EFI_TABLE_HEADER Hdr;
     void *FirmwareVendor;
@@ -96,7 +90,6 @@ typedef struct {
     EFI_BOOT_SERVICES *BootServices;
 } EFI_SYSTEM_TABLE;
 
-// ===== GOP =====
 typedef struct {
     UINT32 Version;
     UINT32 HorizontalResolution;
@@ -122,56 +115,34 @@ typedef struct {
     EFI_GOP_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
-// ===== カーネル入口 =====
-extern void kernel_main(unsigned int* vram, unsigned int stride);
+extern void kernel_main(unsigned int* vram, unsigned int stride,
+                        unsigned int width, unsigned int height);
 
-// ===== panic =====
-void panic(unsigned int* vram, unsigned int stride){
-    console_init(vram, stride);
-    console_set_color(0x00FF0000);
-    console_write("KERNEL PANIC\n");
-    while(1);
-}
-
-// ===== エントリ =====
-EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable){
-
+EFI_STATUS EFIAPI EfiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     EFI_BOOT_SERVICES *BS = SystemTable->BootServices;
 
-    // ===== GOP =====
-    EFI_GUID gop_guid =
-        {0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
-
+    EFI_GUID gop_guid = {0x9042a9de,0x23dc,0x4a38,{0x96,0xfb,0x7a,0xde,0xd0,0x80,0x51,0x6a}};
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
-
-    if(BS->LocateProtocol(&gop_guid, 0, (void**)&gop) != EFI_SUCCESS){
-        while(1);
-    }
+    if (BS->LocateProtocol(&gop_guid, 0, (void**)&gop) != EFI_SUCCESS) while(1);
 
     UINT32 *vram  = (UINT32*)gop->Mode->FrameBufferBase;
     UINT32 stride = gop->Mode->Info->PixelsPerScanLine;
+    UINT32 width  = gop->Mode->Info->HorizontalResolution;
+    UINT32 height = gop->Mode->Info->VerticalResolution;
 
-    // ===== ExitBootServices =====
     UINT64 map_size=0, map_key, desc_size;
     UINT32 desc_ver;
     void *map_buf=0;
-
     BS->GetMemoryMap(&map_size,0,&map_key,&desc_size,&desc_ver);
     map_size += 1024;
     BS->AllocatePool(EfiLoaderData,map_size,&map_buf);
-
     while(1){
-        if(BS->GetMemoryMap(&map_size,map_buf,&map_key,&desc_size,&desc_ver)!=EFI_SUCCESS)
-            continue;
-        if(BS->ExitBootServices(ImageHandle,map_key)==EFI_SUCCESS)
-            break;
+        if(BS->GetMemoryMap(&map_size,map_buf,&map_key,&desc_size,&desc_ver)!=EFI_SUCCESS) continue;
+        if(BS->ExitBootServices(ImageHandle,map_key)==EFI_SUCCESS) break;
     }
 
-    // ===== カーネルへ =====
-    kernel_main(vram, stride);
-
-    // ===== 戻ってきたらpanic =====
-    panic(vram, stride);
-
+    gdt_init();
+    kernel_main(vram, stride, width, height);
+    while(1) __asm__ volatile("hlt");
     return EFI_SUCCESS;
 }

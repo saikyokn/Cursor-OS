@@ -1,121 +1,54 @@
 #include "console.h"
+#include "font.h"
 
-// ===== 外部フォント =====
-extern void draw_char(unsigned int*, unsigned int, int, int, unsigned int, unsigned char);
-extern void draw_string(unsigned int*, unsigned int, int, int, unsigned int, const char*);
-
-// ===== VRAM =====
 static unsigned int* vram;
 static unsigned int stride;
-
-// ===== 画面サイズ =====
-#define SCREEN_W 1024
-#define SCREEN_H 768
+static unsigned int screen_w, screen_h;
+static int cursor_x = 0, cursor_y = 0;
+static unsigned int current_color = 0x00FFFFFF;
 
 #define CHAR_W 8
 #define CHAR_H 16
 
-// ===== カーソル =====
-static int cursor_x = 0;
-static int cursor_y = 0;
-
-// ===== 色 =====
-static unsigned int current_color = 0x00FFFFFF;
-
-// ===== 色変更 =====
-void console_set_color(unsigned int color){
-    current_color = color;
+void console_init(unsigned int* fb, unsigned int s, unsigned int w, unsigned int h) {
+    vram = fb; stride = s; screen_w = w; screen_h = h;
+    cursor_x = cursor_y = 0;
+    console_clear_screen();
 }
 
-// ===== 画面クリア =====
-void console_clear(){
-    for(int y = 0; y < SCREEN_H; y++){
-        for(int x = 0; x < SCREEN_W; x++){
-            vram[y * stride + x] = 0x00000000;
-        }
-    }
-    cursor_x = 0;
-    cursor_y = 0;
+void console_clear_screen(void) {
+    for (unsigned int y = 0; y < screen_h; y++)
+        for (unsigned int x = 0; x < screen_w; x++)
+            vram[y * stride + x] = 0x000000;
+    cursor_x = cursor_y = 0;
 }
 
-// ===== 初期化 =====
-void console_init(unsigned int* fb, unsigned int s){
-    vram = fb;
-    stride = s;
+void console_set_color(unsigned int c) { current_color = c; }
 
-    cursor_x = 0;
-    cursor_y = 0;
-
-    console_clear();
+static void console_scroll(void) {
+    for (unsigned int y = CHAR_H; y < screen_h; y++)
+        for (unsigned int x = 0; x < screen_w; x++)
+            vram[(y - CHAR_H) * stride + x] = vram[y * stride + x];
+    for (unsigned int y = screen_h - CHAR_H; y < screen_h; y++)
+        for (unsigned int x = 0; x < screen_w; x++)
+            vram[y * stride + x] = 0x000000;
 }
 
-// ===== 1文字 =====
-void console_putc(char c){
-
-    if(c == '\n'){
-        cursor_x = 0;
-        cursor_y++;
-        return;
+void console_putc(char c) {
+    if (c == '\n') {
+        cursor_x = 0; cursor_y++;
+    } else if (c == '\b') {
+        if (cursor_x > 0) cursor_x--;
+    } else {
+        draw_char(vram, stride, cursor_x * CHAR_W, cursor_y * CHAR_H, current_color, (unsigned char)c);
+        cursor_x++;
+        if (cursor_x >= (int)(screen_w / CHAR_W)) { cursor_x = 0; cursor_y++; }
     }
-
-    if(c == '\b'){
-        if(cursor_x > 0) cursor_x--;
-        return;
-    }
-
-    draw_char(vram, stride,
-              cursor_x * CHAR_W,
-              cursor_y * CHAR_H,
-              current_color,
-              (unsigned char)c);
-
-    cursor_x++;
-
-    if(cursor_x >= (SCREEN_W / CHAR_W)){
-        cursor_x = 0;
-        cursor_y++;
+    if (cursor_y >= (int)(screen_h / CHAR_H)) {
+        console_scroll();
+        cursor_y = (screen_h / CHAR_H) - 1;
     }
 }
 
-// ===== 文字列 =====
-void console_write(const char* s){
-    while(*s){
-        console_putc(*s++);
-    }
-}
-
-// ===== フル塗りつぶし =====
-void fill_screen(unsigned int color){
-    for(int y = 0; y < SCREEN_H; y++){
-        for(int x = 0; x < SCREEN_W; x++){
-            vram[y * stride + x] = color;
-        }
-    }
-}
-
-// ===== タスクバー =====
-void draw_taskbar(){
-    int bar_height = 40;
-
-    for(int y = SCREEN_H - bar_height; y < SCREEN_H; y++){
-        for(int x = 0; x < SCREEN_W; x++){
-            vram[y * stride + x] = 0x00202020;
-        }
-    }
-}
-
-// ===== UIレンダ =====
-void console_ui_render(){
-    fill_screen(0x000000FF); // 青
-    draw_taskbar();
-
-    draw_string(vram, stride,
-                10,
-                SCREEN_H - 30,
-                0x00FFFFFF,
-                "Kyusasu");
-}
-
-// ===== render =====
-void console_render(){
-}
+void console_write(const char* s) { while (*s) console_putc(*s++); }
+void console_render(void) { }
