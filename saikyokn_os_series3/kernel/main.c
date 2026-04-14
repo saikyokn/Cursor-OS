@@ -146,7 +146,7 @@ void kernel_main(unsigned int* vram, unsigned int stride,
     __asm__ volatile ("sti");
     console_write("Interrupts enabled (PIC + IDT)\n");
 
-    // マウス初期化（割り込み初期化を試みる）
+    // マウス初期化（ハイブリッド：割り込み初期化 + ポーリングフォールバック）
     mouse_init();
     gui_init(vram, stride, width, height);
     console_write("Mouse (polling mode) and GUI initialized\n> ");
@@ -155,7 +155,7 @@ void kernel_main(unsigned int* vram, unsigned int stride,
     int last_gui_active = 1;
 
     while (1) {
-        // ★ マウスポーリング（割り込みが来なくても確実に動く）
+        // マウスポーリング（割り込みが来なくても確実に動く）
         mouse_poll();
 
         int gui_now = gui_is_active();
@@ -183,6 +183,7 @@ void kernel_main(unsigned int* vram, unsigned int stride,
 
         if (gui_now) {
             gui_run();
+            gui_update_clock(ticks); // タスクバーの時計を更新
         }
 
         // ビジーウェイトでループ速度を確保（マウス滑らか化）

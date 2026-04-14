@@ -8,8 +8,14 @@ static unsigned int screen_w, screen_h;
 static int gui_active = 1;
 static int desktop_drawn = 0;
 
+#define TASKBAR_HEIGHT 30
+
 static button_t console_btn;
 static button_t test_btn;
+
+// 時計表示用
+static unsigned long long last_sec = 0;
+static char clock_str[16] = "00:00:00";
 
 // マウス背景保存用
 static uint32_t mouse_backup[16][16];
@@ -53,6 +59,7 @@ void gui_init(unsigned int *fb, unsigned int s, unsigned int w, unsigned int h) 
     gui_active = 1;
     desktop_drawn = 0;
     backup_valid = 0;
+    last_sec = 0;
 }
 
 static void fill_rect(int x, int y, int w, int h, uint32_t color) {
@@ -66,10 +73,48 @@ static void fill_rect(int x, int y, int w, int h, uint32_t color) {
 }
 
 void gui_draw_desktop(void) {
-    fill_rect(0, 0, screen_w, screen_h, 0x00202020);
+    // デスクトップ背景（タスクバー領域を除く）
+    fill_rect(0, 0, screen_w, screen_h - TASKBAR_HEIGHT, 0x00202020);
     gui_draw_button(&console_btn);
     gui_draw_button(&test_btn);
+    gui_draw_taskbar();
     desktop_drawn = 1;
+}
+
+void gui_draw_taskbar(void) {
+    int y = screen_h - TASKBAR_HEIGHT;
+    fill_rect(0, y, screen_w, TASKBAR_HEIGHT, 0x00101010);
+    // 時計は別途描画
+}
+
+static void draw_clock(void) {
+    int y = screen_h - TASKBAR_HEIGHT + 8;
+    int text_width = 8 * 8; // "00:00:00" は8文字
+    int x = screen_w - text_width - 20;
+    // 時計部分の背景をクリア
+    fill_rect(x - 5, screen_h - TASKBAR_HEIGHT, text_width + 10, TASKBAR_HEIGHT, 0x00101010);
+    draw_string(vram, stride, x, y, 0x00FFFFFF, clock_str);
+}
+
+void gui_update_clock(unsigned long long ticks) {
+    unsigned long long sec = ticks / 18;
+    if (sec == last_sec) return;
+    last_sec = sec;
+
+    unsigned long long s = sec % 60;
+    unsigned long long m = (sec / 60) % 60;
+    unsigned long long h = (sec / 3600) % 24;
+
+    clock_str[0] = '0' + (h / 10); clock_str[1] = '0' + (h % 10);
+    clock_str[2] = ':';
+    clock_str[3] = '0' + (m / 10); clock_str[4] = '0' + (m % 10);
+    clock_str[5] = ':';
+    clock_str[6] = '0' + (s / 10); clock_str[7] = '0' + (s % 10);
+    clock_str[8] = '\0';
+
+    if (gui_active) {
+        draw_clock();
+    }
 }
 
 void gui_draw_button(button_t *btn) {
@@ -113,7 +158,6 @@ static void save_mouse_background(int x, int y) {
 
 void gui_draw_mouse(int x, int y) {
     if (x < 0 || y < 0 || x + 16 >= (int)screen_w || y + 16 >= (int)screen_h) return;
-
     restore_mouse_background();
     save_mouse_background(x, y);
 
