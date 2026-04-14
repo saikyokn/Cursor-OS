@@ -1,0 +1,85 @@
+#include "mouse.h"
+
+// PS/2マウス用ポート
+#define MOUSE_DATA   0x60
+#define MOUSE_STATUS 0x64
+#define MOUSE_CMD    0x64
+
+static mouse_state_t mouse = {400, 300, 0, 0, 0};
+static uint8_t mouse_cycle = 0;
+static uint8_t mouse_bytes[3];
+
+// I/Oポート操作
+static inline uint8_t inb(uint16_t port) {
+    uint8_t val;
+    __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+static inline void outb(uint16_t port, uint8_t val) {
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+// キーボードコントローラ経由でマウスにコマンド送信
+static void mouse_write(uint8_t val) {
+    outb(MOUSE_CMD, 0xD4);      // マウスへのコマンド送信を指示
+    outb(MOUSE_DATA, val);
+}
+
+static uint8_t mouse_read(void) {
+    while (!(inb(MOUSE_STATUS) & 1));  // データが来るまで待つ
+    return inb(MOUSE_DATA);
+}
+
+void mouse_init(void) {
+    // PS/2マウスを有効化
+    outb(MOUSE_CMD, 0xA8);      // マウス有効化コマンド
+    mouse_write(0xF4);          // データ送信開始
+    mouse_read();               // ACK読み捨て
+}
+
+void mouse_poll(void) {
+    uint8_t status = inb(MOUSE_STATUS);
+    if (!(status & 1)) return;  // データなし
+    if (!(status & 0x20)) return; // マウスデータではない
+
+    uint8_t data = inb(MOUSE_DATA);
+
+    switch (mouse_cycle) {
+        case 0:
+            if (!(data & 0x08)) break; // 常に1のはずのビットが0なら無効
+            mouse_bytes[0] = data;
+            mouse_cycle = 1;
+            break;
+        case 1:
+            mouse_bytes[1] = data;
+            mouse_cycle = 2;
+            break;
+        case 2:
+            mouse_bytes[2] = data;
+            mouse_cycle = 0;
+
+            // ボタン状態
+            mouse.buttons = mouse_bytes[0] & 0x07;
+            // 移動量（符号拡張）
+            mouse.dx = mouse_bytes[1];
+            if (mouse_bytes[0] & 0x10) mouse.dx |= 0xFFFFFF00;
+            mouse.dy = mouse_bytes[2];
+            if (mouse_bytes[0] & 0x20) mouse.dy |= 0xFFFFFF00;
+            mouse.dy = -mouse.dy; // Y方向反転
+
+            // 座標更新（画面外に出ないように制限）
+            mouse.x += mouse.dx;
+            mouse.y += mouse.dy;
+            if (mouse.x < 0) mouse.x = 0;
+            if (mouse.y < 0) mouse.y = 0;
+            if (mouse.x > 1023) mouse.x = 1023;
+            if (mouse.y > 767) mouse.y = 767;
+            break;
+    }
+}
+
+void mouse_get_state(mouse_state_t *state) {
+    *state = mouse;
+    mouse.dx = mouse.dy = 0; // 移動量をリセット
+}

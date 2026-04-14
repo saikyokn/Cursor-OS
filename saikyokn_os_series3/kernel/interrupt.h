@@ -5,10 +5,11 @@
 
 void interrupt_init(void);
 
-// ソフトウェア割り込みカウンタ
-extern volatile unsigned int sw_int_count;
+extern volatile unsigned int kbd_int_count;
+extern volatile unsigned long long ticks;
 
-// PICマスクレジスタ読み取り用
-unsigned char pic_get_mask(int pic_num);
+void kbd_buffer_put(uint8_t sc);
+int kbd_buffer_empty(void);
+uint8_t kbd_buffer_get(void);
 
 #endif
