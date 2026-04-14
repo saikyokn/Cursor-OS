@@ -141,20 +141,21 @@ void kernel_main(unsigned int* vram, unsigned int stride,
     console_write("SAIKYOKN OS - Booting...\n> ");
     console_render();
 
-    // 割り込みシステム初期化
+    // 割り込みシステム初期化（キーボード・タイマー）
     interrupt_init();
     __asm__ volatile ("sti");
     console_write("Interrupts enabled (PIC + IDT)\n");
 
-    // マウスとGUI初期化
+    // マウス初期化（割り込み初期化を試みる）
     mouse_init();
     gui_init(vram, stride, width, height);
-    console_write("Mouse and GUI initialized\n> ");
+    console_write("Mouse (polling mode) and GUI initialized\n> ");
     console_render();
 
     int last_gui_active = 1;
 
     while (1) {
+        // ★ マウスポーリング（割り込みが来なくても確実に動く）
         mouse_poll();
 
         int gui_now = gui_is_active();
@@ -170,8 +171,9 @@ void kernel_main(unsigned int* vram, unsigned int stride,
             if (!gui_now) {
                 console_keyboard_process(sc);
             }
-            // GUIモード時はすべてのキーを無視（ESC含む）
+            // GUIモード時はすべてのキーを無視
         }
+        // ポーリングフォールバック（キーボードのみ）
         else if (keyboard_ready()) {
             uint8_t sc = keyboard_read();
             if (!gui_now) {

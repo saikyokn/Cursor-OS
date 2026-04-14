@@ -5,6 +5,7 @@
 volatile unsigned int kbd_int_count = 0;
 volatile unsigned long long ticks = 0;
 
+// キーボードバッファ
 #define KBD_BUFFER_SIZE 32
 static volatile uint8_t kbd_buffer[KBD_BUFFER_SIZE];
 static volatile int kbd_head = 0, kbd_tail = 0;
@@ -39,7 +40,10 @@ void keyboard_handler(void) {
     pic_send_eoi(1);
 }
 
-// ★ すべての例外ハンドラを定義（不足分を追加）
+// マウスハンドラは mouse.c で定義
+extern void mouse_handler(void);
+
+// 例外ハンドラ（簡易：無限ループ）
 #define DEFINE_EXCEPTION(name) void name##_handler(void) { while(1) __asm__ volatile ("hlt"); }
 
 DEFINE_EXCEPTION(divide_error)
@@ -51,13 +55,13 @@ DEFINE_EXCEPTION(bound)
 DEFINE_EXCEPTION(invalid_opcode)
 DEFINE_EXCEPTION(device_not_available)
 DEFINE_EXCEPTION(double_fault)
-DEFINE_EXCEPTION(coprocessor_segment_overrun)  // ベクタ9
+DEFINE_EXCEPTION(coprocessor_segment_overrun)
 DEFINE_EXCEPTION(invalid_tss)
 DEFINE_EXCEPTION(segment_not_present)
 DEFINE_EXCEPTION(stack_fault)
 DEFINE_EXCEPTION(general_protection)
 DEFINE_EXCEPTION(page_fault)
-DEFINE_EXCEPTION(reserved)                     // ベクタ15
+DEFINE_EXCEPTION(reserved)
 DEFINE_EXCEPTION(fpu_error)
 DEFINE_EXCEPTION(alignment_check)
 DEFINE_EXCEPTION(machine_check)
@@ -86,6 +90,7 @@ extern void exception_machine_check(void);
 extern void exception_simd_exception(void);
 extern void irq_timer(void);
 extern void irq_keyboard(void);
+extern void irq_mouse(void);      // IRQ12用スタブ
 
 void interrupt_init(void) {
     // 例外ハンドラ登録 (0-31)
@@ -109,11 +114,11 @@ void interrupt_init(void) {
     reg_irq(17, (irq_handler)exception_alignment_check);
     reg_irq(18, (irq_handler)exception_machine_check);
     reg_irq(19, (irq_handler)exception_simd_exception);
-    // 20-31 は予約済み（必要に応じて追加）
     
     // IRQハンドラ登録
     reg_irq(32, (irq_handler)irq_timer);      // IRQ0
     reg_irq(33, (irq_handler)irq_keyboard);  // IRQ1
+    reg_irq(44, (irq_handler)irq_mouse);     // IRQ12（スレーブPICのIRQ4）
     
     install_idt();
     pic_init();

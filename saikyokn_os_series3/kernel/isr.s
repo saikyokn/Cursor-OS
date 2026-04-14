@@ -1,9 +1,10 @@
-/* isr.S - 64ビット割り込みスタブ（堅牢版） */
+/* isr.S - 64ビット割り込みスタブ（マウス対応版・コメント修正） */
 .intel_syntax noprefix
 .section .text
 
 .extern timer_handler
 .extern keyboard_handler
+.extern mouse_handler
 .extern divide_error_handler
 .extern debug_handler
 .extern nmi_handler
@@ -13,11 +14,13 @@
 .extern invalid_opcode_handler
 .extern device_not_available_handler
 .extern double_fault_handler
+.extern coprocessor_segment_overrun_handler
 .extern invalid_tss_handler
 .extern segment_not_present_handler
 .extern stack_fault_handler
 .extern general_protection_handler
 .extern page_fault_handler
+.extern reserved_handler
 .extern fpu_error_handler
 .extern alignment_check_handler
 .extern machine_check_handler
@@ -117,3 +120,4 @@ EXCEPTION_NOERR 19 simd_exception
 
 IRQ_HANDLER 32 timer   timer_handler
 IRQ_HANDLER 33 keyboard keyboard_handler
+IRQ_HANDLER 44 mouse   mouse_handler
