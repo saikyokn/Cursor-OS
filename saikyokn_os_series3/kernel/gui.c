@@ -12,6 +12,8 @@ static int desktop_drawn = 0;
 
 static button_t console_btn;
 static button_t test_btn;
+static button_t paint_btn;   // お絵かき起動ボタン
+static button_t back_btn;    // お絵かきから戻るボタン（左上）
 
 // 時計表示用
 static unsigned long long last_sec = 0;
@@ -22,6 +24,11 @@ static uint32_t mouse_backup[16][16];
 static int backup_x = 0, backup_y = 0;
 static int backup_valid = 0;
 
+// お絵かきモード
+static int paint_mode = 0;
+static int prev_mouse_x = 0, prev_mouse_y = 0;
+static int mouse_was_pressed = 0;
+
 extern void console_activate(void);
 
 static void console_btn_click(void) {
@@ -29,7 +36,18 @@ static void console_btn_click(void) {
 }
 
 static void test_btn_click(void) {
-    // テスト用
+    // テスト用（何もしない）
+}
+
+static void paint_btn_click(void) {
+    paint_mode = 1;
+    desktop_drawn = 0; // 再描画を促す
+}
+
+static void back_btn_click(void) {
+    paint_mode = 0;
+    desktop_drawn = 0; // デスクトップ再描画
+    mouse_was_pressed = 0;
 }
 
 void gui_init(unsigned int *fb, unsigned int s, unsigned int w, unsigned int h) {
@@ -56,10 +74,31 @@ void gui_init(unsigned int *fb, unsigned int s, unsigned int w, unsigned int h) 
     test_btn.hover_color = 0x00A0A040;
     test_btn.on_click = test_btn_click;
 
+    paint_btn.x = 50;
+    paint_btn.y = 170;
+    paint_btn.w = 150;
+    paint_btn.h = 40;
+    paint_btn.text = "Paint";
+    paint_btn.color = 0x00804080;
+    paint_btn.hover_color = 0x00A060A0;
+    paint_btn.on_click = paint_btn_click;
+
+    // ★ 左上に配置
+    back_btn.x = 10;
+    back_btn.y = 10;
+    back_btn.w = 50;
+    back_btn.h = 30;
+    back_btn.text = "X";
+    back_btn.color = 0x00FF0000;
+    back_btn.hover_color = 0x00FF4040;
+    back_btn.on_click = back_btn_click;
+
     gui_active = 1;
     desktop_drawn = 0;
     backup_valid = 0;
     last_sec = 0;
+    paint_mode = 0;
+    mouse_was_pressed = 0;
 }
 
 static void fill_rect(int x, int y, int w, int h, uint32_t color) {
@@ -73,25 +112,31 @@ static void fill_rect(int x, int y, int w, int h, uint32_t color) {
 }
 
 void gui_draw_desktop(void) {
-    // デスクトップ背景（タスクバー領域を除く）
-    fill_rect(0, 0, screen_w, screen_h - TASKBAR_HEIGHT, 0x00202020);
-    gui_draw_button(&console_btn);
-    gui_draw_button(&test_btn);
-    gui_draw_taskbar();
+    if (paint_mode) {
+        // お絵かきモードの背景（黒）
+        fill_rect(0, 0, screen_w, screen_h, 0x00000000);
+        gui_draw_button(&back_btn);
+    } else {
+        fill_rect(0, 0, screen_w, screen_h - TASKBAR_HEIGHT, 0x00202020);
+        gui_draw_button(&console_btn);
+        gui_draw_button(&test_btn);
+        gui_draw_button(&paint_btn);
+        gui_draw_taskbar();
+    }
     desktop_drawn = 1;
 }
 
 void gui_draw_taskbar(void) {
+    if (paint_mode) return;
     int y = screen_h - TASKBAR_HEIGHT;
     fill_rect(0, y, screen_w, TASKBAR_HEIGHT, 0x00101010);
-    // 時計は別途描画
 }
 
 static void draw_clock(void) {
+    if (paint_mode) return;
     int y = screen_h - TASKBAR_HEIGHT + 8;
-    int text_width = 8 * 8; // "00:00:00" は8文字
+    int text_width = 8 * 8;
     int x = screen_w - text_width - 20;
-    // 時計部分の背景をクリア
     fill_rect(x - 5, screen_h - TASKBAR_HEIGHT, text_width + 10, TASKBAR_HEIGHT, 0x00101010);
     draw_string(vram, stride, x, y, 0x00FFFFFF, clock_str);
 }
@@ -112,7 +157,7 @@ void gui_update_clock(unsigned long long ticks) {
     clock_str[6] = '0' + (s / 10); clock_str[7] = '0' + (s % 10);
     clock_str[8] = '\0';
 
-    if (gui_active) {
+    if (gui_active && !paint_mode) {
         draw_clock();
     }
 }
@@ -172,7 +217,47 @@ void gui_draw_mouse(int x, int y) {
     }
 }
 
+// 整数のみで線を描く Bresenham アルゴリズム
+static void draw_line(int x0, int y0, int x1, int y1, uint32_t color) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+
+    int sx = (dx > 0) ? 1 : -1;
+    int sy = (dy > 0) ? 1 : -1;
+
+    dx = (dx > 0) ? dx : -dx;
+    dy = (dy > 0) ? dy : -dy;
+
+    int err = dx - dy;
+    int x = x0, y = y0;
+
+    while (1) {
+        if (x >= 0 && x < (int)screen_w && y >= 0 && y < (int)screen_h)
+            vram[y * stride + x] = color;
+
+        if (x == x1 && y == y1) break;
+
+        int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            x += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y += sy;
+        }
+    }
+}
+
 void gui_handle_click(int x, int y) {
+    if (paint_mode) {
+        if (x >= back_btn.x && x < back_btn.x + back_btn.w &&
+            y >= back_btn.y && y < back_btn.y + back_btn.h) {
+            back_btn.on_click();
+        }
+        return;
+    }
+
     if (x >= console_btn.x && x < console_btn.x + console_btn.w &&
         y >= console_btn.y && y < console_btn.y + console_btn.h) {
         console_btn.on_click();
@@ -180,6 +265,10 @@ void gui_handle_click(int x, int y) {
     else if (x >= test_btn.x && x < test_btn.x + test_btn.w &&
              y >= test_btn.y && y < test_btn.y + test_btn.h) {
         test_btn.on_click();
+    }
+    else if (x >= paint_btn.x && x < paint_btn.x + paint_btn.w &&
+             y >= paint_btn.y && y < paint_btn.y + paint_btn.h) {
+        paint_btn.on_click();
     }
 }
 
@@ -194,6 +283,21 @@ void gui_run(void) {
         gui_draw_desktop();
     }
 
+    // お絵かきモードの描画処理
+    if (paint_mode) {
+        if (m.buttons & 1) {
+            if (mouse_was_pressed) {
+                draw_line(prev_mouse_x, prev_mouse_y, m.x, m.y, 0x00FFFFFF);
+            }
+            prev_mouse_x = m.x;
+            prev_mouse_y = m.y;
+            mouse_was_pressed = 1;
+        } else {
+            mouse_was_pressed = 0;
+        }
+        gui_draw_button(&back_btn);
+    }
+
     gui_draw_mouse(m.x, m.y);
 
     if ((m.buttons & 1) && !(last_buttons & 1)) {
@@ -206,6 +310,7 @@ void gui_switch_to_console(void) {
     gui_active = 0;
     desktop_drawn = 0;
     backup_valid = 0;
+    paint_mode = 0;
     console_activate();
 }
 
@@ -213,6 +318,7 @@ void gui_activate(void) {
     gui_active = 1;
     desktop_drawn = 0;
     backup_valid = 0;
+    paint_mode = 0;
 }
 
 int gui_is_active(void) {
